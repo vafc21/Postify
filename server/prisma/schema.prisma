@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tokens  Token[]
+  apiKeys ApiKey?
+  posts   Post[]
+
+  @@map("users")
+}
+
+model Token {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  platform     String
+  accessToken  String   @map("access_token")
+  refreshToken String?  @map("refresh_token")
+  expiresAt    DateTime? @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@map("tokens")
+}
+
+model ApiKey {
+  id                     String   @id @default(uuid())
+  userId                 String   @unique @map("user_id")
+  groqKey                String?  @map("groq_key")
+  openaiKey              String?  @map("openai_key")
+  claudeKey              String?  @map("claude_key")
+  preferredTranscription String   @default("groq") @map("preferred_transcription")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+model Post {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  videoUrl         String?  @map("video_url")
+  description      String?
+  platforms        String[]
+  status           String   @default("pending")
+  youtubeResult    Json?    @map("youtube_result")
+  instagramResult  Json?    @map("instagram_result")
+  tiktokResult     Json?    @map("tiktok_result")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("posts")
+}

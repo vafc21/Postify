@@ -1,0 +1,54 @@
+services:
+  # ─── Backend API ─────────────────────────────────────────────────────────
+  - type: web
+    name: postify-server
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npx prisma generate && npx prisma migrate deploy
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: META_CLIENT_ID
+        sync: false
+      - key: META_CLIENT_SECRET
+        sync: false
+      - key: TIKTOK_CLIENT_ID
+        sync: false
+      - key: TIKTOK_CLIENT_SECRET
+        sync: false
+      - key: SERVER_URL
+        sync: false   # Set to your Render backend URL, e.g. https://postify-server.onrender.com
+      - key: CLIENT_URL
+        sync: false   # Set to your Render frontend URL, e.g. https://postify.onrender.com
+
+  # ─── Frontend (Static Site) ───────────────────────────────────────────────
+  - type: web
+    name: postify-client
+    runtime: static
+    rootDir: client
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+
+databases:
+  - name: postify-db
+    plan: starter
