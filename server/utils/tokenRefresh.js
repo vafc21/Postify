@@ -1,7 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('./prisma');
 const { encrypt, decrypt } = require('./encryption');
 
-const prisma = new PrismaClient();
 
 /**
  * Refresh a YouTube (Google) access token using the stored refresh token.

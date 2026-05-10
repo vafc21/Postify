@@ -1,11 +1,8 @@
 const axios = require('axios');
 const { getValidToken } = require('../utils/tokenRefresh');
 const { decrypt } = require('../utils/encryption');
-const { PrismaClient } = require('@prisma/client');
-const FormData = require('form-data');
-const fs = require('fs');
+const prisma = require('../utils/prisma');
 
-const prisma = new PrismaClient();
 const GRAPH_API = 'https://graph.facebook.com/v19.0';
 
 /**

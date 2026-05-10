@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, Video, X, FileVideo } from 'lucide-react';
 
@@ -22,6 +22,21 @@ export default function DropZone({ file, onFile, onClear }) {
     maxFiles: 1,
     maxSize: 500 * 1024 * 1024, // 500MB
   });
+
+  // Create an object URL for the video preview and revoke it when the file
+  // changes or the component unmounts to prevent memory leaks.
+  const [objectUrl, setObjectUrl] = useState(null);
+  useEffect(() => {
+    if (!file) {
+      setObjectUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setObjectUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
 
   if (file) {
     const sizeLabel =
@@ -49,13 +64,15 @@ export default function DropZone({ file, onFile, onClear }) {
         </div>
 
         {/* Video preview */}
-        <div className="mt-4 rounded-xl overflow-hidden bg-black aspect-video">
-          <video
-            src={URL.createObjectURL(file)}
-            controls
-            className="w-full h-full object-contain"
-          />
-        </div>
+        {objectUrl && (
+          <div className="mt-4 rounded-xl overflow-hidden bg-black aspect-video">
+            <video
+              src={objectUrl}
+              controls
+              className="w-full h-full object-contain"
+            />
+          </div>
+        )}
       </div>
     );
   }
