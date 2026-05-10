@@ -83,17 +83,11 @@ Please generate platform-specific content for the platforms listed above.`;
     throw new Error('Claude returned an empty response');
   }
 
-  // Extract JSON robustly: handle code fences anywhere in the response,
-  // or plain JSON if Claude responds without fences.
-  let jsonText;
-  const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) {
-    jsonText = fenceMatch[1].trim();
-  } else {
-    // Try to find raw JSON object in the response (handles preamble text)
-    const jsonMatch = rawText.match(/(\{[\s\S]*\})/);
-    jsonText = jsonMatch ? jsonMatch[1].trim() : rawText;
-  }
+  // Strip markdown code fences if present
+  const jsonText = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
 
   try {
     const parsed = JSON.parse(jsonText);

@@ -55,10 +55,9 @@ async function postToTikTok({ userId, filePath, captions }) {
       return { success: false, error: 'TikTok: Failed to get upload URL' };
     }
 
-    // Step 2: Upload video binary using a readable stream to avoid
-    // loading the entire file into memory at once (safe for large files).
-    const videoStream = fs.createReadStream(filePath);
-    await axios.put(upload_url, videoStream, {
+    // Step 2: Upload video binary
+    const videoBuffer = fs.readFileSync(filePath);
+    await axios.put(upload_url, videoBuffer, {
       headers: {
         'Content-Type': 'video/mp4',
         'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`,
@@ -69,12 +68,14 @@ async function postToTikTok({ userId, filePath, captions }) {
     });
 
     // Step 3: Poll for publish status
-    const PROCESSING_STATUSES = new Set(['PROCESSING_UPLOAD', 'PROCESSING_PUBLISH']);
     let status = 'PROCESSING_UPLOAD';
     let attempts = 0;
     const maxAttempts = 24;
 
-    while (PROCESSING_STATUSES.has(status) && attempts < maxAttempts) {
+    while (
+      (status === 'PROCESSING_UPLOAD' || status === 'PROCESSING_PUBLISH') &&
+      attempts < maxAttempts
+    ) {
       await new Promise((r) => setTimeout(r, 5000));
 
       const statusRes = await axios.post(
@@ -88,13 +89,7 @@ async function postToTikTok({ userId, filePath, captions }) {
         }
       );
 
-      // Guard against unexpected API response shapes
-      const newStatus = statusRes.data?.data?.status;
-      if (!newStatus) {
-        console.warn('TikTok status API returned unexpected shape:', statusRes.data);
-        break; // Exit loop rather than spin indefinitely
-      }
-      status = newStatus;
+      status = statusRes.data?.data?.status;
       attempts++;
     }
 
@@ -103,7 +98,7 @@ async function postToTikTok({ userId, filePath, captions }) {
     } else {
       return {
         success: false,
-        error: `TikTok publish did not complete. Final status: ${status || 'unknown'}`,
+        error: `TikTok publish did not complete. Status: ${status}`,
       };
     }
   } catch (err) {

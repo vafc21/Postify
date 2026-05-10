@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const prisma = require('../utils/prisma');
+const { PrismaClient } = require('@prisma/client');
 const authMiddleware = require('../middleware/authMiddleware');
 const { decrypt } = require('../utils/encryption');
 const { transcribe } = require('../services/transcriptionService');
@@ -12,6 +12,7 @@ const { postToInstagram } = require('../services/instagramService');
 const { postToTikTok } = require('../services/tiktokService');
 
 const router = express.Router();
+const prisma = new PrismaClient();
 
 // Configure multer for local storage
 const storage = multer.diskStorage({
@@ -51,29 +52,11 @@ function safeDeleteFile(filePath) {
 }
 
 // POST /api/upload — main upload + pipeline endpoint
-// Use a custom multer callback so multer errors (file too large, wrong type)
-// are caught here and return a clean JSON response (instead of hitting the
-// global error handler without a file to clean up).
-router.post('/', authMiddleware, (req, res, next) => {
-  upload.single('video')(req, res, (err) => {
-    if (err) {
-      // Clean up any partially-written file if multer saved one before erroring
-      if (req.file?.path) safeDeleteFile(req.file.path);
-      const message =
-        err.code === 'LIMIT_FILE_SIZE'
-          ? 'File too large. Maximum file size is 500MB.'
-          : err.message || 'Upload error';
-      return res.status(400).json({ error: message });
-    }
-    next();
-  });
-}, async (req, res) => {
+router.post('/', authMiddleware, upload.single('video'), async (req, res) => {
   const filePath = req.file?.path;
 
   try {
-    // Default description to empty string to avoid undefined in DB
-    const description = (req.body.description || '').trim();
-    const platformsRaw = req.body.platforms;
+    const { description, platforms: platformsRaw } = req.body;
 
     let platforms = [];
     try {
@@ -155,43 +138,31 @@ router.post('/', authMiddleware, (req, res, next) => {
       const results = {};
       const postPromises = [];
 
-      if (platforms.includes('youtube')) {
-        if (captions.youtube) {
-          postPromises.push(
-            postToYouTube({ userId: req.userId, filePath, captions: captions.youtube })
-              .then((r) => { results.youtube = r; })
-          );
-        } else {
-          results.youtube = { success: false, error: 'AI did not generate YouTube captions' };
-        }
+      if (platforms.includes('youtube') && captions.youtube) {
+        postPromises.push(
+          postToYouTube({ userId: req.userId, filePath, captions: captions.youtube })
+            .then((r) => { results.youtube = r; })
+        );
       }
 
-      if (platforms.includes('instagram')) {
-        if (captions.instagram) {
-          // For Instagram, video must be publicly accessible; build a temp URL.
-          const videoPublicUrl = `${process.env.SERVER_URL}/uploads/${path.basename(filePath)}`;
-          postPromises.push(
-            postToInstagram({
-              userId: req.userId,
-              filePath,
-              captions: captions.instagram,
-              videoPublicUrl,
-            }).then((r) => { results.instagram = r; })
-          );
-        } else {
-          results.instagram = { success: false, error: 'AI did not generate Instagram captions' };
-        }
+      if (platforms.includes('instagram') && captions.instagram) {
+        // For Instagram, video must be publicly accessible. Build a temp URL.
+        const videoPublicUrl = `${process.env.SERVER_URL}/uploads/${path.basename(filePath)}`;
+        postPromises.push(
+          postToInstagram({
+            userId: req.userId,
+            filePath,
+            captions: captions.instagram,
+            videoPublicUrl,
+          }).then((r) => { results.instagram = r; })
+        );
       }
 
-      if (platforms.includes('tiktok')) {
-        if (captions.tiktok) {
-          postPromises.push(
-            postToTikTok({ userId: req.userId, filePath, captions: captions.tiktok })
-              .then((r) => { results.tiktok = r; })
-          );
-        } else {
-          results.tiktok = { success: false, error: 'AI did not generate TikTok captions' };
-        }
+      if (platforms.includes('tiktok') && captions.tiktok) {
+        postPromises.push(
+          postToTikTok({ userId: req.userId, filePath, captions: captions.tiktok })
+            .then((r) => { results.tiktok = r; })
+        );
       }
 
       await Promise.allSettled(postPromises);

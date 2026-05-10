@@ -14,18 +14,6 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ─── Global error handlers ────────────────────────────────────────────────────
-// Prevent unhandled promise rejections from crashing the process silently.
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  // Give the process time to log then exit — let the host (Render) restart it.
-  process.exit(1);
-});
-
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({

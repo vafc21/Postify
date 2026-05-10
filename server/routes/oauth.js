@@ -1,11 +1,12 @@
 const express = require('express');
 const { google } = require('googleapis');
 const axios = require('axios');
-const prisma = require('../utils/prisma');
+const { PrismaClient } = require('@prisma/client');
 const authMiddleware = require('../middleware/authMiddleware');
 const { encrypt } = require('../utils/encryption');
 
 const router = express.Router();
+const prisma = new PrismaClient();
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

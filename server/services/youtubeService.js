@@ -2,8 +2,9 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const { getValidToken } = require('../utils/tokenRefresh');
 const { decrypt } = require('../utils/encryption');
-const prisma = require('../utils/prisma');
+const { PrismaClient } = require('@prisma/client');
 
+const prisma = new PrismaClient();
 
 /**
  * Upload a video to YouTube Shorts.

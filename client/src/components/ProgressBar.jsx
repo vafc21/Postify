@@ -9,10 +9,6 @@ const STEPS = [
 ];
 
 export default function ProgressBar({ currentStep, error }) {
-  // Show actual progress percentage even when errored so the bar doesn't
-  // misleadingly snap to 100% when something fails at step 2 of 5.
-  const progressPct = `${(currentStep / 5) * 100}%`;
-
   return (
     <div className="bg-[#1a1a24] border border-white/10 rounded-2xl p-6">
       <div className="flex items-center justify-between mb-4">
@@ -33,7 +29,7 @@ export default function ProgressBar({ currentStep, error }) {
             className={`h-full rounded-full transition-all duration-700 ease-out ${
               error ? 'bg-red-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'
             }`}
-            style={{ width: progressPct }}
+            style={{ width: error ? '100%' : `${(currentStep / 5) * 100}%` }}
           />
         </div>
       </div>
@@ -43,7 +39,7 @@ export default function ProgressBar({ currentStep, error }) {
         {STEPS.map((step) => {
           const isDone = currentStep > step.id;
           const isActive = currentStep === step.id && !error;
-          const isErrored = error && currentStep === step.id;
+          const isPending = currentStep < step.id;
 
           return (
             <div key={step.id} className="flex items-center gap-3">
@@ -51,7 +47,7 @@ export default function ProgressBar({ currentStep, error }) {
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
               ) : isActive ? (
                 <Loader2 className="w-4 h-4 text-indigo-400 animate-spin flex-shrink-0" />
-              ) : isErrored ? (
+              ) : error && currentStep === step.id ? (
                 <Circle className="w-4 h-4 text-red-400 flex-shrink-0" />
               ) : (
                 <Circle className="w-4 h-4 text-white/15 flex-shrink-0" />
@@ -59,7 +55,6 @@ export default function ProgressBar({ currentStep, error }) {
               <span className={`text-sm transition-colors ${
                 isDone ? 'text-emerald-400' :
                 isActive ? 'text-white' :
-                isErrored ? 'text-red-400' :
                 'text-slate-600'
               }`}>
                 {step.label}

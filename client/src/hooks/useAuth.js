@@ -36,15 +36,8 @@ export function useAuth() {
   };
 
   const logout = async () => {
-    try {
-      await api.post('/auth/logout');
-    } catch {
-      // If the API call fails the cookie is still cleared server-side on next
-      // valid request. Always clear the local user state so the UI reflects
-      // the logged-out condition regardless of network errors.
-    } finally {
-      setUser(null);
-    }
+    await api.post('/auth/logout');
+    setUser(null);
   };
 
   return { user, loading, error, login, register, logout, refetch: fetchMe };

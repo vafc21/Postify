@@ -1,11 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
 
-// In production the frontend and backend are on separate domains.
-// VITE_API_URL must be set to the backend origin (e.g. https://postify-api.onrender.com).
-// In development it is left unset and Vite's dev-proxy handles /api/* forwarding.
-const API_ORIGIN = import.meta.env.VITE_API_URL || '';
-
 export function usePlatforms() {
   const [status, setStatus] = useState({ youtube: false, instagram: false, tiktok: false });
   const [loading, setLoading] = useState(true);
@@ -26,8 +21,8 @@ export function usePlatforms() {
   }, [fetchStatus]);
 
   const connect = (platform) => {
-    // Full URL required in production where frontend/backend live on different origins.
-    window.location.href = `${API_ORIGIN}/api/oauth/${platform}`;
+    // Redirect to backend OAuth initiation (cookie auth is sent automatically)
+    window.location.href = `/api/oauth/${platform}`;
   };
 
   const disconnect = async (platform) => {

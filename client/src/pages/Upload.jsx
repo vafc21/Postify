@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import DropZone from '../components/DropZone';
 import ProgressBar from '../components/ProgressBar';
 import { YouTubeIcon, InstagramIcon, TikTokIcon } from '../components/PlatformIcons';
@@ -7,10 +7,6 @@ import { usePlatforms } from '../hooks/usePlatforms';
 import {
   ArrowLeft, Zap, Send, CheckCircle2, ExternalLink, AlertTriangle
 } from 'lucide-react';
-
-// Full backend origin — required in production where frontend/backend are on
-// separate domains. Falls back to '' (same origin) for Vite dev proxy.
-const API_ORIGIN = import.meta.env.VITE_API_URL || '';
 
 const PLATFORM_UI = {
   youtube: {
@@ -132,7 +128,7 @@ export default function Upload() {
     formData.append('platforms', JSON.stringify(selectedPlatforms));
 
     try {
-      const response = await fetch(`${API_ORIGIN}/api/upload`, {
+      const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
         credentials: 'include',
@@ -146,7 +142,6 @@ export default function Upload() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let receivedDone = false;
 
       while (true) {
         const { done: streamDone, value } = await reader.read();
@@ -163,7 +158,6 @@ export default function Upload() {
             if (data.step === 0) {
               setPipelineError(data.error || 'Pipeline failed');
               setSubmitting(false);
-              receivedDone = true;
               return;
             }
             setCurrentStep(data.step);
@@ -172,17 +166,9 @@ export default function Upload() {
               setFinalCaptions(data.captions);
               setDone(true);
               setSubmitting(false);
-              receivedDone = true;
             }
           } catch (_) {}
         }
-      }
-
-      // Stream closed without a step-5 event (e.g. server crashed mid-pipeline)
-      if (!receivedDone) {
-        setPipelineError('Connection lost. Please check your posts and try again.');
-        setCurrentStep(0);
-        setSubmitting(false);
       }
     } catch (err) {
       setPipelineError(err.message || 'Upload failed');

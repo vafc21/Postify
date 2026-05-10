@@ -1,9 +1,10 @@
 const express = require('express');
-const prisma = require('../utils/prisma');
+const { PrismaClient } = require('@prisma/client');
 const authMiddleware = require('../middleware/authMiddleware');
 const { encrypt, decrypt, maskKey } = require('../utils/encryption');
 
 const router = express.Router();
+const prisma = new PrismaClient();
 
 // GET /api/settings — fetch current API key settings (masked)
 router.get('/', authMiddleware, async (req, res) => {

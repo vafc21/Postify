@@ -51,4 +51,4 @@ services:
 
 databases:
   - name: postify-db
-    plan: starter
+    plan: free

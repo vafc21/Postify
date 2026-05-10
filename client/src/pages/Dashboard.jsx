@@ -28,8 +28,7 @@ export default function Dashboard() {
       setToast({ type: 'error', message: `OAuth failed: ${error.replace(/_/g, ' ')}` });
       setSearchParams({});
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, refetch, setSearchParams]);
+  }, [searchParams]);
 
   // Auto-dismiss toast
   useEffect(() => {
