@@ -150,20 +150,50 @@ router.delete('/:id/media', auth, async (req, res) => {
   }
 });
 
-// POST /api/posts/:id/unpost (Meta deletion wired in Phase 2)
+// POST /api/posts/:id/unpost
 router.post('/:id/unpost', auth, async (req, res) => {
   try {
-    const post = await findPost(req.params.id, req.userId);
+    const post = await prisma.scheduledPost.findFirst({
+      where: { id: req.params.id, client: { userId: req.userId } },
+      include: { client: { select: { userId: true } } },
+    });
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.status !== 'posted') {
       return res.status(400).json({ error: 'Post has not been published yet' });
+    }
+
+    const { deleteIgPost, deleteFbPost } = require('../services/meta');
+    const tokens = await prisma.clientToken.findMany({ where: { clientId: post.clientId } });
+    const errors = [];
+
+    const igToken = tokens.find(t => t.platform === 'instagram');
+    if (igToken && post.instagramResult?.feed?.mediaId) {
+      try {
+        await deleteIgPost(post.instagramResult.feed.mediaId, igToken.accessToken);
+      } catch (err) {
+        errors.push(`Instagram: ${err.response?.data?.error?.message || err.message}`);
+      }
+    }
+
+    const fbToken = tokens.find(t => t.platform === 'facebook');
+    if (fbToken && post.facebookResult?.feed?.postId) {
+      try {
+        await deleteFbPost(post.facebookResult.feed.postId, fbToken.accessToken);
+      } catch (err) {
+        errors.push(`Facebook: ${err.response?.data?.error?.message || err.message}`);
+      }
     }
 
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
       data: { status: 'uploaded', instagramResult: null, facebookResult: null },
     });
-    res.json({ message: 'Post reverted to uploaded status', post: updated });
+
+    res.json({
+      message: errors.length ? 'Partial unpost — some platforms failed' : 'Unposted successfully',
+      errors,
+      post: updated,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to unpost' });
