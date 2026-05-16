@@ -6,6 +6,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
+const { deleteIgPost, deleteFbPost } = require('../services/meta');
 
 const router = express.Router();
 
@@ -162,7 +163,6 @@ router.post('/:id/unpost', auth, async (req, res) => {
       return res.status(400).json({ error: 'Post has not been published yet' });
     }
 
-    const { deleteIgPost, deleteFbPost } = require('../services/meta');
     const tokens = await prisma.clientToken.findMany({ where: { clientId: post.clientId } });
     const errors = [];
 
@@ -182,6 +182,18 @@ router.post('/:id/unpost', auth, async (req, res) => {
       } catch (err) {
         errors.push(`Facebook: ${err.response?.data?.error?.message || err.message}`);
       }
+    }
+
+    const igDeleted = igToken && post.instagramResult?.feed?.mediaId && !errors.find(e => e.startsWith('Instagram:'));
+    const fbDeleted = fbToken && post.facebookResult?.feed?.postId && !errors.find(e => e.startsWith('Facebook:'));
+    const nothingToDelete = (!igToken || !post.instagramResult?.feed?.mediaId) && (!fbToken || !post.facebookResult?.feed?.postId);
+
+    if (!nothingToDelete && errors.length > 0 && !igDeleted && !fbDeleted) {
+      // All relevant deletes failed — don't wipe the DB record
+      return res.status(502).json({
+        message: 'Failed to unpost from all platforms',
+        errors,
+      });
     }
 
     const updated = await prisma.scheduledPost.update({

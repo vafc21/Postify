@@ -103,7 +103,7 @@ router.get('/callback', async (req, res) => {
     res.redirect(`${CLIENT_URL}/oauth-result?success=true&clientId=${clientId}&platform=${platform}`);
   } catch (err) {
     console.error('OAuth callback error:', err);
-    res.redirect(`${CLIENT_URL}/oauth-result?error=${encodeURIComponent(err.message)}`);
+    res.redirect(`${CLIENT_URL}/oauth-result?error=oauth_failed`);
   }
 });
 

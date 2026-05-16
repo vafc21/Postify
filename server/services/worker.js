@@ -6,10 +6,12 @@ const POLL_INTERVAL_MS = 60 * 1000;
 
 async function processPost(post) {
   try {
-    await prisma.scheduledPost.update({
-      where: { id: post.id },
+    // Before publishing, atomically claim the post (prevents double-publish on restart/multi-instance)
+    const claimed = await prisma.scheduledPost.updateMany({
+      where: { id: post.id, status: 'uploaded' },
       data: { status: 'posting' },
     });
+    if (claimed.count === 0) return; // another process already claimed it
 
     const [tokens, user] = await Promise.all([
       prisma.clientToken.findMany({ where: { clientId: post.clientId } }),
@@ -86,6 +88,21 @@ async function topUpSlots() {
   }
 }
 
+// Recover posts stuck in 'posting' from a previous server crash
+async function recoverStuckPosts() {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const stuck = await prisma.scheduledPost.updateMany({
+    where: {
+      status: 'posting',
+      updatedAt: { lt: fiveMinutesAgo },
+    },
+    data: { status: 'failed', instagramResult: { error: 'Server restarted during publish' } },
+  });
+  if (stuck.count > 0) {
+    console.log(`Worker: recovered ${stuck.count} stuck post(s) from previous session`);
+  }
+}
+
 function startWorker() {
   console.log('Worker: started, polling every 60s');
   const tick = async () => {
@@ -96,8 +113,8 @@ function startWorker() {
       console.error('Worker tick error:', err);
     }
   };
-  tick();
+  recoverStuckPosts().then(() => tick());
   return setInterval(tick, POLL_INTERVAL_MS);
 }
 
-module.exports = { startWorker, processPost, publishDuePosts, topUpSlots };
+module.exports = { startWorker, processPost, publishDuePosts, topUpSlots, recoverStuckPosts };

@@ -69,7 +69,7 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
 
     const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, {
       media_type: 'CAROUSEL',
-      children: childIds.join(','),
+      children: childIds,
       caption,
       access_token: accessToken,
     });
@@ -103,12 +103,11 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
   const isVideo = mediaType === 'video';
   const params = isVideo
     ? { media_type: 'VIDEO', video_url: `${serverUrl}${mediaUrls[0]}` }
-    : { image_url: `${serverUrl}${mediaUrls[0]}` };
+    : { media_type: 'IMAGE', image_url: `${serverUrl}${mediaUrls[0]}` };
 
   const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, {
     ...params,
-    media_type: isVideo ? 'VIDEO' : undefined,
-    is_story: !isVideo ? true : undefined,
+    is_story: true,
     access_token: accessToken,
   });
 
