@@ -27,8 +27,13 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    await api.post('/auth/logout');
-    setUser(null);
+    try {
+      await api.post('/auth/logout');
+    } catch (_) {
+      // ignore — server session may already be cleared
+    } finally {
+      setUser(null);
+    }
   };
 
   const updateUser = (updates) => setUser(u => ({ ...u, ...updates }));

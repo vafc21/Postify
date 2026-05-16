@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { useEffect } from 'react';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -9,6 +10,15 @@ import ClientProfile from './pages/ClientProfile';
 import CampaignView from './pages/CampaignView';
 import Settings from './pages/Settings';
 import OAuthResult from './pages/OAuthResult';
+
+function ThemeSync() {
+  const { user } = useAuth();
+  const { setTheme } = useTheme();
+  useEffect(() => {
+    if (user?.theme) setTheme(user.theme);
+  }, [user?.theme, setTheme]);
+  return null;
+}
 
 function AppRoutes() {
   const { user, loading } = useAuth();
@@ -25,27 +35,28 @@ function AppRoutes() {
   }
 
   return (
-    <ThemeProvider initialTheme={user.theme || 'dark'}>
-      <Routes>
-        <Route path="/oauth-result" element={<OAuthResult />} />
-        <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/clients/:id" element={<ClientProfile />} />
-          <Route path="/campaigns/:id" element={<CampaignView />} />
-          <Route path="/settings" element={<Settings />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </ThemeProvider>
+    <Routes>
+      <Route path="/oauth-result" element={<OAuthResult />} />
+      <Route element={<Layout />}>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/clients/:id" element={<ClientProfile />} />
+        <Route path="/campaigns/:id" element={<CampaignView />} />
+        <Route path="/settings" element={<Settings />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <ThemeSync />
+          <AppRoutes />
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

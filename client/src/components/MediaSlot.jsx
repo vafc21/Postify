@@ -36,18 +36,30 @@ export default function MediaSlot({ post, onChange }) {
 
   const deleteMedia = async () => {
     if (!confirm('Remove uploaded media? Slot will revert to pending.')) return;
-    const { data } = await api.delete(`/posts/${post.id}/media`);
-    onChange(data);
+    try {
+      const { data } = await api.delete(`/posts/${post.id}/media`);
+      onChange(data);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to remove media');
+    }
   };
 
   const saveCaption = async () => {
-    const { data } = await api.put(`/posts/${post.id}`, { caption });
-    onChange(data);
+    try {
+      const { data } = await api.put(`/posts/${post.id}`, { caption });
+      onChange(data);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to save caption');
+    }
   };
 
   const toggleStory = async () => {
-    const { data } = await api.put(`/posts/${post.id}`, { postToStory: !post.postToStory });
-    onChange(data);
+    try {
+      const { data } = await api.put(`/posts/${post.id}`, { postToStory: !post.postToStory });
+      onChange(data);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to update story setting');
+    }
   };
 
   const unpost = async () => {

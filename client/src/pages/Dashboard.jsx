@@ -70,7 +70,8 @@ function PostCard({ post, urgent, onClick, showStatus }) {
         </div>}
       </div>
       {!showStatus && (
-        <button onClick={e => { e.stopPropagation(); }} style={{ background: 'var(--bg-3)', color: 'var(--primary)', borderRadius: 4, padding: '3px 8px', fontSize: 10, border: 'none', cursor: 'pointer', flexShrink: 0 }}>Upload</button>
+        <button onClick={e => { e.stopPropagation(); navigate(`/campaigns/${post.campaignId}`); }}
+          style={{ background: 'var(--bg-3)', color: 'var(--primary)', borderRadius: 4, padding: '3px 8px', fontSize: 10, border: 'none', cursor: 'pointer', flexShrink: 0 }}>Upload</button>
       )}
     </div>
   );

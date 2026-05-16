@@ -48,8 +48,13 @@ export default function Settings() {
   const handleThemeToggle = async () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
-    await api.put('/settings', { theme: newTheme });
-    updateUser({ theme: newTheme });
+    try {
+      await api.put('/settings', { theme: newTheme });
+      updateUser({ theme: newTheme });
+    } catch (err) {
+      setTheme(theme); // rollback
+      setError('Failed to save theme preference');
+    }
   };
 
   return (

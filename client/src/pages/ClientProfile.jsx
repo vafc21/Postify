@@ -26,6 +26,7 @@ export default function ClientProfile() {
 
   useEffect(() => {
     const handler = (e) => {
+      if (e.origin !== window.location.origin) return;
       if (e.data?.type === 'oauth-result' && e.data?.clientId === id) {
         load();
       }
@@ -45,8 +46,12 @@ export default function ClientProfile() {
 
   const disconnectPlatform = async (platform) => {
     if (!confirm(`Disconnect ${platform}?`)) return;
-    await api.delete(`/oauth/clients/${id}/tokens/${platform}`);
-    load();
+    try {
+      await api.delete(`/oauth/clients/${id}/tokens/${platform}`);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || `Failed to disconnect ${platform}`);
+    }
   };
 
   const handleCampaignCreated = (campaign) => {
