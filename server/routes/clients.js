@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const { MulterError } = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -7,6 +8,18 @@ const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
 
 const router = express.Router();
+
+function runUpload(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (err instanceof MulterError) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err) return next(err);
+      next();
+    });
+  };
+}
 
 // Ensure logo upload dir exists
 const logoDir = path.join(__dirname, '../uploads/logos');
@@ -37,7 +50,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // POST /api/clients
-router.post('/', auth, uploadLogo.single('logo'), async (req, res) => {
+router.post('/', auth, runUpload(uploadLogo.single('logo')), async (req, res) => {
   try {
     const { name, businessName, website, industry, contactName, contactEmail, notes } = req.body;
     if (!name) return res.status(400).json({ error: 'Client name is required' });
@@ -83,7 +96,7 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // PUT /api/clients/:id
-router.put('/:id', auth, uploadLogo.single('logo'), async (req, res) => {
+router.put('/:id', auth, runUpload(uploadLogo.single('logo')), async (req, res) => {
   try {
     const existing = await prisma.client.findFirst({ where: { id: req.params.id, userId: req.userId } });
     if (!existing) return res.status(404).json({ error: 'Client not found' });
@@ -99,6 +112,7 @@ router.put('/:id', auth, uploadLogo.single('logo'), async (req, res) => {
     if (notes !== undefined) data.notes = notes;
     if (req.file) data.logoUrl = `/uploads/logos/${req.file.filename}`;
 
+    // Ownership verified by findFirst above; TOCTOU window is acceptable here
     const client = await prisma.client.update({ where: { id: req.params.id }, data });
     res.json(client);
   } catch (err) {
@@ -112,6 +126,7 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     const existing = await prisma.client.findFirst({ where: { id: req.params.id, userId: req.userId } });
     if (!existing) return res.status(404).json({ error: 'Client not found' });
+    // Ownership verified by findFirst above; TOCTOU window is acceptable here
     await prisma.client.delete({ where: { id: req.params.id } });
     res.json({ message: 'Client deleted' });
   } catch (err) {

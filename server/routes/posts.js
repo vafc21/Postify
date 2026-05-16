@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const { MulterError } = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -18,6 +19,18 @@ const mediaStorage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
 });
 const uploadMedia = multer({ storage: mediaStorage, limits: { fileSize: 100 * 1024 * 1024 } });
+
+function runUpload(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (err instanceof MulterError) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err) return next(err);
+      next();
+    });
+  };
+}
 
 async function findPost(postId, userId) {
   return prisma.scheduledPost.findFirst({
@@ -44,7 +57,7 @@ router.get('/', auth, async (req, res) => {
         campaign: { select: { id: true, name: true } },
       },
       orderBy: { scheduledFor: 'asc' },
-      take: Number(limit),
+      take: Math.min(Math.max(Number(limit) || 50, 1), 200),
     });
     res.json(posts);
   } catch (err) {
@@ -75,7 +88,7 @@ router.get('/campaign/:campaignId', auth, async (req, res) => {
 });
 
 // POST /api/posts/:id/media
-router.post('/:id/media', auth, uploadMedia.array('media', 10), async (req, res) => {
+router.post('/:id/media', auth, runUpload(uploadMedia.array('media', 10)), async (req, res) => {
   try {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });

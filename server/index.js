@@ -10,6 +10,8 @@ const clientRoutes = require('./routes/clients');
 const campaignRoutes = require('./routes/campaigns');
 const postRoutes = require('./routes/posts');
 const errorHandler = require('./middleware/errorHandler');
+const auth = require('./middleware/authMiddleware');
+const { TEMPLATES } = require('./services/templates');
 
 const app = express();
 
@@ -35,6 +37,8 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/posts', postRoutes);
+// Spec: GET /api/templates (also available at GET /api/campaigns/templates)
+app.get('/api/templates', auth, (req, res) => res.json(TEMPLATES));
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use(errorHandler);
