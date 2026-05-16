@@ -1,11 +1,16 @@
 import { useState, useRef } from 'react';
-import { Upload, Play, Trash2, RefreshCw, RotateCcw } from 'lucide-react';
+import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link } from 'lucide-react';
 import api from '../api';
 
 export default function MediaSlot({ post, onChange }) {
   const [loading, setLoading] = useState(false);
   const [caption, setCaption] = useState(post.caption || '');
+  const [location, setLocation] = useState(post.location || '');
+  const [locationId, setLocationId] = useState(post.locationId || '');
+  const [storyLink, setStoryLink] = useState(post.storyLink || '');
+  const [thumbOffset, setThumbOffset] = useState(post.thumbOffset != null ? String(post.thumbOffset) : '');
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [showExtra, setShowExtra] = useState(false);
   const fileRef = useRef();
   const SERVER = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
 
@@ -44,12 +49,12 @@ export default function MediaSlot({ post, onChange }) {
     }
   };
 
-  const saveCaption = async () => {
+  const saveField = async (fields) => {
     try {
-      const { data } = await api.put(`/posts/${post.id}`, { caption });
+      const { data } = await api.put(`/posts/${post.id}`, fields);
       onChange(data);
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to save caption');
+      alert(err.response?.data?.error || 'Failed to save');
     }
   };
 
@@ -75,6 +80,7 @@ export default function MediaSlot({ post, onChange }) {
 
   const hasMedia = post.mediaUrls?.length > 0;
   const scheduledLabel = new Date(post.scheduledFor).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const isLocked = ['posting', 'posted'].includes(post.status);
 
   return (
     <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, borderLeft: `3px solid ${borderColor}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -150,9 +156,80 @@ export default function MediaSlot({ post, onChange }) {
           placeholder="Caption..."
           value={caption}
           onChange={e => setCaption(e.target.value)}
-          onBlur={saveCaption}
-          disabled={post.status === 'posting'}
+          onBlur={() => saveField({ caption })}
+          disabled={isLocked}
         />
+
+        {/* Expandable extra fields */}
+        {!isLocked && (
+          <button
+            onClick={() => setShowExtra(v => !v)}
+            style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 3 }}>
+            {showExtra ? '▲' : '▼'} {showExtra ? 'Hide' : 'More'} options
+          </button>
+        )}
+
+        {showExtra && !isLocked && (
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {/* Location */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <MapPin size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+              <input
+                style={miniInputStyle}
+                placeholder="Location name (e.g. Miami Beach)"
+                value={location}
+                onChange={e => setLocation(e.target.value)}
+                onBlur={() => saveField({ location })}
+              />
+              <input
+                style={{ ...miniInputStyle, width: 120 }}
+                placeholder="FB Place ID (optional)"
+                value={locationId}
+                onChange={e => setLocationId(e.target.value)}
+                onBlur={() => saveField({ locationId })}
+              />
+            </div>
+
+            {/* Story link / mention */}
+            {post.postToStory && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Link size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                <input
+                  style={miniInputStyle}
+                  placeholder="Story link or mention URL"
+                  value={storyLink}
+                  onChange={e => setStoryLink(e.target.value)}
+                  onBlur={() => saveField({ storyLink })}
+                />
+              </div>
+            )}
+
+            {/* Video thumbnail offset */}
+            {post.mediaType === 'video' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 10, flexShrink: 0 }}>Cover offset (ms)</span>
+                <input
+                  style={{ ...miniInputStyle, width: 100 }}
+                  type="number"
+                  placeholder="e.g. 2000"
+                  value={thumbOffset}
+                  onChange={e => setThumbOffset(e.target.value)}
+                  onBlur={() => saveField({ thumbOffset })}
+                  min="0"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Show saved values as compact chips when collapsed */}
+        {!showExtra && (post.location || post.storyLink || post.thumbOffset != null) && (
+          <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {post.location && <Chip icon={<MapPin size={9} />} label={post.location} />}
+            {post.storyLink && <Chip icon={<Link size={9} />} label="Story link set" />}
+            {post.thumbOffset != null && <Chip label={`Cover @ ${post.thumbOffset}ms`} />}
+          </div>
+        )}
       </div>
 
       {previewUrl && (
@@ -189,7 +266,26 @@ function ActionBtn({ icon, onClick, title, danger }) {
   );
 }
 
+function Chip({ icon, label }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'var(--bg-3)', borderRadius: 4, padding: '2px 6px', fontSize: 9, color: 'var(--text-muted)' }}>
+      {icon}{label}
+    </div>
+  );
+}
+
 const actionBtnBase = { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px 7px', borderRadius: 4, background: 'var(--bg-3)', border: 'none', cursor: 'pointer', fontSize: 11 };
+
+const miniInputStyle = {
+  flex: 1,
+  padding: '4px 7px',
+  borderRadius: 5,
+  border: '1px solid var(--border)',
+  background: 'var(--bg-2)',
+  color: 'var(--text)',
+  fontSize: 10,
+  outline: 'none',
+};
 
 function isUrgent(post) {
   return new Date(post.scheduledFor) - new Date() < 24 * 60 * 60 * 1000;
