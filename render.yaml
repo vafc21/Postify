@@ -15,20 +15,6 @@ services:
         generateValue: true
       - key: ENCRYPTION_KEY
         generateValue: true
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: META_CLIENT_ID
-        sync: false
-      - key: META_CLIENT_SECRET
-        sync: false
-      - key: TIKTOK_CLIENT_ID
-        sync: false
-      - key: TIKTOK_CLIENT_SECRET
-        sync: false
       - key: SERVER_URL
         sync: false   # Set to your Render backend URL, e.g. https://postify-server.onrender.com
       - key: CLIENT_URL
