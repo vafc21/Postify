@@ -8,13 +8,15 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  passwordHash  String    @map("password_hash")
-  metaAppId     String?   @map("meta_app_id")
-  metaAppSecret String?   @map("meta_app_secret")
-  theme         String    @default("dark")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  id                     String    @id @default(uuid())
+  email                  String    @unique
+  passwordHash           String    @map("password_hash")
+  metaAppId              String?   @map("meta_app_id")
+  metaAppSecret          String?   @map("meta_app_secret")
+  theme                  String    @default("dark")
+  timezone               String    @default("America/New_York") @map("timezone")
+  notificationWebhookUrl String?   @map("notification_webhook_url")
+  createdAt              DateTime  @default(now()) @map("created_at")
 
   clients Client[]
 
@@ -91,6 +93,10 @@ model ScheduledPost {
   mediaUrls       String[] @map("media_urls")
   caption         String?
   postToStory     Boolean  @default(true) @map("post_to_story")
+  location        String?
+  locationId      String?  @map("location_id")
+  storyLink       String?  @map("story_link")
+  thumbOffset     Int?     @map("thumb_offset")
   status          String   @default("pending")
   instagramResult Json?    @map("instagram_result")
   facebookResult  Json?    @map("facebook_result")
