@@ -6,54 +6,8 @@ const authMiddleware = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// POST /api/auth/register
-router.post('/register', async (req, res) => {
-  try {
-    let { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    // Normalize email to prevent duplicate accounts with different casing/whitespace
-    email = email.trim().toLowerCase();
-
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
-    }
-
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      return res.status(409).json({ error: 'Email already in use' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await prisma.user.create({
-      data: { email, passwordHash },
-    });
-
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-
-    res.status(201).json({
-      message: 'Account created successfully',
-      user: { id: user.id, email: user.email },
-    });
-  } catch (err) {
-    console.error('Register error:', err);
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
+// Registration is disabled — admin account is seeded from environment variables
+router.post('/register', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {

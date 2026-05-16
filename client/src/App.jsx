@@ -4,7 +4,6 @@ import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { useEffect } from 'react';
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import ClientProfile from './pages/ClientProfile';
 import CampaignView from './pages/CampaignView';
@@ -28,7 +27,6 @@ function AppRoutes() {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );

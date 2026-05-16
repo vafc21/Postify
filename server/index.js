@@ -45,11 +45,34 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use(errorHandler);
 
+async function seedAdminUser() {
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email || !password) {
+    console.warn('ADMIN_EMAIL or ADMIN_PASSWORD not set — no admin user seeded');
+    return;
+  }
+  const bcrypt = require('bcryptjs');
+  const prisma = require('./utils/prisma');
+  const passwordHash = await bcrypt.hash(password, 12);
+  await prisma.user.upsert({
+    where: { email },
+    update: { passwordHash },
+    create: { email, passwordHash },
+  });
+  console.log(`Admin user ready: ${email}`);
+}
+
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-  const { startWorker } = require('./services/worker');
-  startWorker();
+  seedAdminUser().then(() => {
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    const { startWorker } = require('./services/worker');
+    startWorker();
+  }).catch(err => {
+    console.error('Failed to seed admin user:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = app;
