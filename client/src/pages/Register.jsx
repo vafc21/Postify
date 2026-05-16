@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
-import { Zap, Mail, Lock, Loader2 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Register() {
   const { register } = useAuth();
@@ -12,112 +11,35 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-
-    if (form.password.length < 8) {
-      return setError('Password must be at least 8 characters.');
-    }
-    if (form.password !== form.confirm) {
-      return setError('Passwords do not match.');
-    }
-
-    setLoading(true);
+    if (form.password !== form.confirm) return setError('Passwords do not match');
+    setError(''); setLoading(true);
     try {
       await register(form.email, form.password);
-      navigate('/dashboard');
+      navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Registration failed. Please try again.');
+      setError(err.response?.data?.error || 'Registration failed');
     } finally {
       setLoading(false);
     }
   };
 
+  const inputStyle = { padding: '9px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, outline: 'none', width: '100%' };
+  const btnStyle = { padding: '10px', borderRadius: 6, background: 'var(--primary)', color: '#fff', fontWeight: 600, fontSize: 13, border: 'none', cursor: 'pointer', width: '100%' };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0f0f13] px-4">
-      <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-3">
-            <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center">
-              <Zap className="w-6 h-6 text-white" fill="white" />
-            </div>
-            <span className="text-2xl font-bold text-white">Postify</span>
-          </div>
-          <p className="text-slate-400 text-sm">Post everywhere. Once.</p>
-        </div>
-
-        {/* Card */}
-        <div className="bg-[#1a1a24] border border-white/10 rounded-2xl p-8">
-          <h1 className="text-xl font-semibold text-white mb-6">Create your account</h1>
-
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3 mb-5">
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                <input
-                  type="email"
-                  required
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="you@example.com"
-                  className="w-full bg-[#0f0f13] border border-white/10 rounded-lg pl-10 pr-4 py-2.5 text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  placeholder="Min. 8 characters"
-                  className="w-full bg-[#0f0f13] border border-white/10 rounded-lg pl-10 pr-4 py-2.5 text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Confirm Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                <input
-                  type="password"
-                  required
-                  value={form.confirm}
-                  onChange={(e) => setForm({ ...form, confirm: e.target.value })}
-                  placeholder="••••••••"
-                  className="w-full bg-[#0f0f13] border border-white/10 rounded-lg pl-10 pr-4 py-2.5 text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2.5 transition flex items-center justify-center gap-2 mt-2"
-            >
-              {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating account...</> : 'Create account'}
-            </button>
-          </form>
-
-          <p className="text-sm text-slate-500 text-center mt-6">
-            Already have an account?{' '}
-            <Link to="/login" className="text-indigo-400 hover:text-indigo-300 font-medium">
-              Sign in
-            </Link>
-          </p>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg)' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 32, width: 360 }}>
+        <div style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 22, letterSpacing: 1, marginBottom: 8 }}>POSTIFY</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 24 }}>Create your account</div>
+        {error && <div style={{ background: '#2d1212', border: '1px solid var(--danger)', color: 'var(--danger)', borderRadius: 6, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input style={inputStyle} type="email" placeholder="Email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} required />
+          <input style={inputStyle} type="password" placeholder="Password (min 8 chars)" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} required />
+          <input style={inputStyle} type="password" placeholder="Confirm password" value={form.confirm} onChange={e => setForm(f => ({ ...f, confirm: e.target.value }))} required />
+          <button type="submit" style={btnStyle} disabled={loading}>{loading ? 'Creating account...' : 'Create Account'}</button>
+        </form>
+        <div style={{ marginTop: 16, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+          Already have an account? <Link to="/login" style={{ color: 'var(--primary)' }}>Sign in</Link>
         </div>
       </div>
     </div>
