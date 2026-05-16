@@ -118,10 +118,14 @@ router.put('/:id', auth, async (req, res) => {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    const { caption, postToStory } = req.body;
+    const { caption, postToStory, location, locationId, storyLink, thumbOffset } = req.body;
     const data = {};
     if (caption !== undefined) data.caption = caption;
     if (postToStory !== undefined) data.postToStory = postToStory;
+    if (location !== undefined) data.location = location;
+    if (locationId !== undefined) data.locationId = locationId;
+    if (storyLink !== undefined) data.storyLink = storyLink;
+    if (thumbOffset !== undefined) data.thumbOffset = thumbOffset === '' ? null : Number(thumbOffset);
 
     const updated = await prisma.scheduledPost.update({ where: { id: req.params.id }, data });
     res.json(updated);

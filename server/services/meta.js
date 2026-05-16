@@ -38,13 +38,15 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
 }
 
 async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
-  const { mediaType, mediaUrls, caption, postToStory } = post;
-  const feedResult = await publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl });
+  const { mediaType, mediaUrls, caption, postToStory, locationId, storyLink, thumbOffset } = post;
+  const feedResult = await publishIgFeed({
+    igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
+  });
 
   let storyResult = null;
   if (postToStory) {
     try {
-      storyResult = await publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl });
+      storyResult = await publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink });
     } catch (err) {
       storyResult = { error: err.response?.data || err.message };
     }
@@ -53,7 +55,7 @@ async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
   return { feed: feedResult, story: storyResult };
 }
 
-async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl }) {
+async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset }) {
   let creationId;
 
   if (mediaType === 'carousel') {
@@ -67,28 +69,38 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
       )
     );
 
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, {
+    const params = {
       media_type: 'CAROUSEL',
       children: childIds,
       caption,
       access_token: accessToken,
-    });
+    };
+    if (locationId) params.location_id = locationId;
+
+    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
     creationId = data.id;
   } else if (mediaType === 'video') {
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, {
+    const params = {
       media_type: 'REELS',
       video_url: `${serverUrl}${mediaUrls[0]}`,
       caption,
       access_token: accessToken,
-    });
+    };
+    if (locationId) params.location_id = locationId;
+    if (thumbOffset != null) params.thumb_offset = thumbOffset;
+
+    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
     creationId = data.id;
     await waitForContainer(creationId, accessToken);
   } else {
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, {
+    const params = {
       image_url: `${serverUrl}${mediaUrls[0]}`,
       caption,
       access_token: accessToken,
-    });
+    };
+    if (locationId) params.location_id = locationId;
+
+    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
     creationId = data.id;
   }
 
@@ -99,17 +111,21 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   return { mediaId: data.id, creationId };
 }
 
-async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl }) {
+async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink }) {
   const isVideo = mediaType === 'video';
   const params = isVideo
     ? { media_type: 'VIDEO', video_url: `${serverUrl}${mediaUrls[0]}` }
     : { media_type: 'IMAGE', image_url: `${serverUrl}${mediaUrls[0]}` };
 
-  const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, {
-    ...params,
-    is_story: true,
-    access_token: accessToken,
-  });
+  params.is_story = true;
+  params.access_token = accessToken;
+
+  if (storyLink) {
+    // Attach as a link sticker so viewers can tap through to the URL
+    params.link_sticker = { link: storyLink };
+  }
+
+  const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
 
   if (isVideo) await waitForContainer(container.id, accessToken);
 
@@ -121,16 +137,30 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
 }
 
 async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
-  const { mediaType, mediaUrls, caption } = post;
+  const { mediaType, mediaUrls, caption, postToStory, locationId } = post;
   let feedResult;
 
   if (mediaType === 'video') {
-    const { data } = await axios.post(`${GRAPH}/${pageId}/videos`, {
+    const params = {
       file_url: `${serverUrl}${mediaUrls[0]}`,
       description: caption,
       access_token: accessToken,
-    });
+    };
+    if (locationId) params.place = locationId;
+
+    const { data } = await axios.post(`${GRAPH}/${pageId}/videos`, params);
     feedResult = { videoId: data.id };
+
+    // Auto-like our own post after it publishes
+    if (data.id) {
+      await likeFbPost(data.id, accessToken).catch(() => {});
+    }
+
+    // Share to Facebook story after feed post
+    if (postToStory) {
+      const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+      return { feed: feedResult, story: storyResult };
+    }
   } else if (mediaType === 'carousel' || mediaType === 'photo') {
     if (mediaUrls.length > 1) {
       const photoIds = await Promise.all(
@@ -142,23 +172,75 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
           }).then(r => ({ media_fbid: r.data.id }))
         )
       );
-      const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, {
+
+      const params = {
         message: caption,
         attached_media: photoIds,
         access_token: accessToken,
-      });
+      };
+      if (locationId) params.place = locationId;
+
+      const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, params);
       feedResult = { postId: data.id };
+
+      if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+
+      if (postToStory) {
+        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+        return { feed: feedResult, story: storyResult };
+      }
     } else {
-      const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, {
+      const params = {
         url: `${serverUrl}${mediaUrls[0]}`,
         message: caption,
         access_token: accessToken,
-      });
+      };
+      if (locationId) params.place = locationId;
+
+      const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, params);
       feedResult = { photoId: data.id };
+
+      if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+
+      if (postToStory) {
+        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+        return { feed: feedResult, story: storyResult };
+      }
     }
   }
 
   return { feed: feedResult };
+}
+
+async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl }) {
+  try {
+    if (mediaType === 'video') {
+      const { data } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
+        file_url: `${serverUrl}${mediaUrls[0]}`,
+        upload_phase: 'finish',
+        access_token: accessToken,
+      });
+      return { storyId: data.id };
+    } else {
+      // For photos, upload unpublished then share to story
+      const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
+        url: `${serverUrl}${mediaUrls[0]}`,
+        published: false,
+        access_token: accessToken,
+      });
+      const { data } = await axios.post(`${GRAPH}/${pageId}/stories`, {
+        photo_id: photo.id,
+        access_token: accessToken,
+      });
+      return { storyId: data.id };
+    }
+  } catch (err) {
+    return { error: err.response?.data || err.message };
+  }
+}
+
+async function likeFbPost(postId, accessToken) {
+  await axios.post(`${GRAPH}/${postId}/likes`, { access_token: accessToken });
 }
 
 async function waitForContainer(containerId, accessToken, maxAttempts = 15) {

@@ -3,6 +3,23 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import api from '../api';
 
+const TIMEZONES = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Phoenix',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+];
+
 export default function Settings() {
   const { user, updateUser } = useAuth();
   const { theme, setTheme } = useTheme();
@@ -11,6 +28,8 @@ export default function Settings() {
     metaAppSecret: '',
     password: '',
     confirmPassword: '',
+    timezone: user?.timezone || 'America/New_York',
+    notificationWebhookUrl: user?.notificationWebhookUrl || '',
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -29,6 +48,10 @@ export default function Settings() {
       if (form.metaAppId !== (user?.metaAppId || '')) payload.metaAppId = form.metaAppId;
       if (form.metaAppSecret) payload.metaAppSecret = form.metaAppSecret;
       if (form.password) payload.password = form.password;
+      if (form.timezone !== (user?.timezone || 'America/New_York')) payload.timezone = form.timezone;
+      if (form.notificationWebhookUrl !== (user?.notificationWebhookUrl || '')) {
+        payload.notificationWebhookUrl = form.notificationWebhookUrl;
+      }
 
       if (Object.keys(payload).length === 0) {
         setSaved(true); setTimeout(() => setSaved(false), 2000); return;
@@ -52,7 +75,7 @@ export default function Settings() {
       await api.put('/settings', { theme: newTheme });
       updateUser({ theme: newTheme });
     } catch (err) {
-      setTheme(theme); // rollback
+      setTheme(theme);
       setError('Failed to save theme preference');
     }
   };
@@ -72,6 +95,32 @@ export default function Settings() {
             <div onClick={handleThemeToggle} style={{ width: 40, height: 22, borderRadius: 11, background: theme === 'dark' ? 'var(--primary)' : 'var(--border)', position: 'relative', cursor: 'pointer', transition: 'background 0.2s' }}>
               <div style={{ position: 'absolute', top: 3, left: theme === 'dark' ? 20 : 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
             </div>
+          </div>
+        </Section>
+
+        <Section title="Posting Schedule">
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10, lineHeight: 1.6 }}>
+            Posts only publish between <strong style={{ color: 'var(--text)' }}>8 AM – 8 PM</strong> in your timezone. Any post due outside this window is held until the window reopens.
+          </div>
+          <div>
+            <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, fontWeight: 700, letterSpacing: 1, marginBottom: 4, textTransform: 'uppercase' }}>Timezone</label>
+            <select
+              value={form.timezone}
+              onChange={set('timezone')}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, outline: 'none' }}>
+              {TIMEZONES.map(tz => (
+                <option key={tz} value={tz}>{tz.replace('_', ' ')}</option>
+              ))}
+            </select>
+          </div>
+          <Field
+            label="Completion Notification Webhook URL"
+            value={form.notificationWebhookUrl}
+            onChange={set('notificationWebhookUrl')}
+            placeholder="https://hooks.slack.com/... (optional)"
+          />
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.5 }}>
+            After each post publishes, a JSON payload is sent to this URL with the client name and platforms posted to. Works with Slack, Discord, Zapier, etc.
           </div>
         </Section>
 

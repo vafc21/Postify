@@ -1,27 +1,69 @@
+const axios = require('axios');
 const prisma = require('../utils/prisma');
 const { publishPost } = require('./meta');
 const { generateSlots } = require('./slotGenerator');
 
 const POLL_INTERVAL_MS = 60 * 1000;
 
+function isWithinPostingWindow(timezone) {
+  const tz = timezone || process.env.POSTING_TIMEZONE || 'America/New_York';
+  const hour = parseInt(
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(new Date()),
+    10
+  );
+  return hour >= 8 && hour < 20;
+}
+
+async function sendCompletionWebhook(webhookUrl, post, client) {
+  if (!webhookUrl) return;
+  try {
+    await axios.post(webhookUrl, {
+      event: 'post_published',
+      message: `Done - ${client.name}`,
+      clientName: client.name,
+      businessName: client.businessName,
+      postId: post.id,
+      scheduledFor: post.scheduledFor,
+      platforms: [
+        post.instagramResult && !post.instagramResult.error ? 'Instagram' : null,
+        post.facebookResult && !post.facebookResult.error ? 'Facebook' : null,
+      ].filter(Boolean),
+      timestamp: new Date().toISOString(),
+    }, { timeout: 5000 });
+  } catch (err) {
+    console.warn(`Worker: webhook notification failed: ${err.message}`);
+  }
+}
+
 async function processPost(post) {
   try {
-    // Before publishing, atomically claim the post (prevents double-publish on restart/multi-instance)
     const claimed = await prisma.scheduledPost.updateMany({
       where: { id: post.id, status: 'uploaded' },
       data: { status: 'posting' },
     });
-    if (claimed.count === 0) return; // another process already claimed it
+    if (claimed.count === 0) return;
 
     const [tokens, user] = await Promise.all([
       prisma.clientToken.findMany({ where: { clientId: post.clientId } }),
-      prisma.user.findUnique({ where: { id: post.client.userId }, select: { metaAppId: true, metaAppSecret: true } }),
+      prisma.user.findUnique({
+        where: { id: post.client.userId },
+        select: { metaAppId: true, metaAppSecret: true, notificationWebhookUrl: true, timezone: true },
+      }),
     ]);
+
+    if (!isWithinPostingWindow(user?.timezone)) {
+      // Outside posting window — release the claim so it can be picked up later
+      await prisma.scheduledPost.updateMany({
+        where: { id: post.id, status: 'posting' },
+        data: { status: 'uploaded' },
+      });
+      return;
+    }
 
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
     const { instagramResult, facebookResult } = await publishPost(post, tokens, user, serverUrl);
 
-    await prisma.scheduledPost.update({
+    const updated = await prisma.scheduledPost.update({
       where: { id: post.id },
       data: {
         status: 'posted',
@@ -29,6 +71,9 @@ async function processPost(post) {
         facebookResult: facebookResult || undefined,
       },
     });
+
+    // Notify that this post is done
+    await sendCompletionWebhook(user.notificationWebhookUrl, updated, post.client);
   } catch (err) {
     console.error(`Worker: failed to post ${post.id}:`, err.message);
     await prisma.scheduledPost.update({
@@ -47,7 +92,9 @@ async function publishDuePosts() {
       status: 'uploaded',
       scheduledFor: { lte: new Date() },
     },
-    include: { client: { select: { userId: true } } },
+    include: {
+      client: { select: { userId: true, name: true, businessName: true } },
+    },
   });
 
   if (duePosts.length > 0) {
@@ -88,7 +135,6 @@ async function topUpSlots() {
   }
 }
 
-// Recover posts stuck in 'posting' from a previous server crash
 async function recoverStuckPosts() {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
   const stuck = await prisma.scheduledPost.updateMany({
