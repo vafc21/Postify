@@ -1,281 +1,124 @@
 const express = require('express');
-const { google } = require('googleapis');
+const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const prisma = require('../utils/prisma');
-const authMiddleware = require('../middleware/authMiddleware');
-const { encrypt } = require('../utils/encryption');
+const auth = require('../middleware/authMiddleware');
+const { getLongLivedToken, getPagesAndIgAccounts } = require('../services/meta');
 
 const router = express.Router();
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+const GRAPH_AUTH = 'https://www.facebook.com/v18.0/dialog/oauth';
+const SCOPES = 'pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish';
 
-function getServerUrl() {
-  return process.env.SERVER_URL || 'http://localhost:5000';
-}
-
-function getClientUrl() {
-  return process.env.CLIENT_URL || 'http://localhost:5173';
-}
-
-// ─── YOUTUBE ─────────────────────────────────────────────────────────────────
-
-function getYouTubeOAuthClient() {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    `${getServerUrl()}/api/oauth/youtube/callback`
-  );
-}
-
-// GET /api/oauth/youtube — initiate YouTube OAuth
-router.get('/youtube', authMiddleware, (req, res) => {
-  const oauth2Client = getYouTubeOAuthClient();
-  const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/youtube.upload'],
-    state: req.userId,
-    prompt: 'consent',
-  });
-  res.redirect(url);
-});
-
-// GET /api/oauth/youtube/callback
-router.get('/youtube/callback', async (req, res) => {
-  const { code, state: userId, error } = req.query;
-
-  if (error || !code) {
-    return res.redirect(`${getClientUrl()}/dashboard?error=youtube_auth_failed`);
-  }
-
+// GET /api/oauth/clients/:clientId/connect/:platform
+router.get('/clients/:clientId/connect/:platform', auth, async (req, res) => {
   try {
-    const oauth2Client = getYouTubeOAuthClient();
-    const { tokens } = await oauth2Client.getToken(code);
-
-    await prisma.token.upsert({
-      where: { userId_platform: { userId, platform: 'youtube' } },
-      update: {
-        accessToken: encrypt(tokens.access_token),
-        refreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : undefined,
-        expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-      },
-      create: {
-        userId,
-        platform: 'youtube',
-        accessToken: encrypt(tokens.access_token),
-        refreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
-        expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-      },
-    });
-
-    res.redirect(`${getClientUrl()}/dashboard?connected=youtube`);
-  } catch (err) {
-    console.error('YouTube OAuth callback error:', err);
-    res.redirect(`${getClientUrl()}/dashboard?error=youtube_auth_failed`);
-  }
-});
-
-// ─── INSTAGRAM (META) ────────────────────────────────────────────────────────
-
-// GET /api/oauth/instagram — initiate Instagram OAuth
-router.get('/instagram', authMiddleware, (req, res) => {
-  const params = new URLSearchParams({
-    client_id: process.env.META_CLIENT_ID,
-    redirect_uri: `${getServerUrl()}/api/oauth/instagram/callback`,
-    scope: 'instagram_basic,instagram_content_publish,pages_show_list,instagram_manage_insights',
-    response_type: 'code',
-    state: req.userId,
-  });
-  res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`);
-});
-
-// GET /api/oauth/instagram/callback
-router.get('/instagram/callback', async (req, res) => {
-  const { code, state: userId, error } = req.query;
-
-  if (error || !code) {
-    return res.redirect(`${getClientUrl()}/dashboard?error=instagram_auth_failed`);
-  }
-
-  try {
-    // Exchange code for short-lived token
-    const tokenRes = await axios.post(
-      'https://graph.facebook.com/v19.0/oauth/access_token',
-      null,
-      {
-        params: {
-          client_id: process.env.META_CLIENT_ID,
-          client_secret: process.env.META_CLIENT_SECRET,
-          redirect_uri: `${getServerUrl()}/api/oauth/instagram/callback`,
-          code,
-        },
-      }
-    );
-
-    const shortToken = tokenRes.data.access_token;
-
-    // Exchange for long-lived token (60 days)
-    const longTokenRes = await axios.get(
-      'https://graph.facebook.com/v19.0/oauth/access_token',
-      {
-        params: {
-          grant_type: 'fb_exchange_token',
-          client_id: process.env.META_CLIENT_ID,
-          client_secret: process.env.META_CLIENT_SECRET,
-          fb_exchange_token: shortToken,
-        },
-      }
-    );
-
-    const longToken = longTokenRes.data.access_token;
-    const expiresIn = longTokenRes.data.expires_in; // seconds
-
-    // Get the Instagram Business Account ID
-    const meRes = await axios.get('https://graph.facebook.com/v19.0/me/accounts', {
-      params: { access_token: longToken },
-    });
-
-    const pages = meRes.data.data || [];
-    let igAccountId = null;
-
-    for (const page of pages) {
-      try {
-        const igRes = await axios.get(
-          `https://graph.facebook.com/v19.0/${page.id}`,
-          {
-            params: {
-              fields: 'instagram_business_account',
-              access_token: page.access_token || longToken,
-            },
-          }
-        );
-        if (igRes.data.instagram_business_account) {
-          igAccountId = igRes.data.instagram_business_account.id;
-          break;
-        }
-      } catch (_) { /* skip page */ }
+    const { clientId, platform } = req.params;
+    if (!['instagram', 'facebook'].includes(platform)) {
+      return res.status(400).json({ error: 'Invalid platform' });
     }
 
-    await prisma.token.upsert({
-      where: { userId_platform: { userId, platform: 'instagram' } },
-      update: {
-        accessToken: encrypt(longToken),
-        refreshToken: igAccountId ? encrypt(igAccountId) : null,
-        expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
-      },
-      create: {
-        userId,
-        platform: 'instagram',
-        accessToken: encrypt(longToken),
-        refreshToken: igAccountId ? encrypt(igAccountId) : null,
-        expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
-      },
-    });
+    const client = await prisma.client.findFirst({ where: { id: clientId, userId: req.userId } });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
 
-    res.redirect(`${getClientUrl()}/dashboard?connected=instagram`);
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user?.metaAppId || !user?.metaAppSecret) {
+      return res.status(400).json({ error: 'Set Meta App ID and Secret in Settings first' });
+    }
+
+    const state = jwt.sign(
+      { clientId, platform, userId: req.userId },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    const redirectUri = `${process.env.SERVER_URL || 'http://localhost:5000'}/api/oauth/callback`;
+    const url = `${GRAPH_AUTH}?client_id=${user.metaAppId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${SCOPES}&state=${state}&response_type=code`;
+
+    res.json({ url });
   } catch (err) {
-    console.error('Instagram OAuth callback error:', err.response?.data || err.message);
-    res.redirect(`${getClientUrl()}/dashboard?error=instagram_auth_failed`);
+    console.error(err);
+    res.status(500).json({ error: 'Failed to initiate OAuth' });
   }
 });
 
-// ─── TIKTOK ──────────────────────────────────────────────────────────────────
+// GET /api/oauth/callback
+router.get('/callback', async (req, res) => {
+  const { code, state, error: oauthError } = req.query;
+  const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
-// GET /api/oauth/tiktok — initiate TikTok OAuth
-router.get('/tiktok', authMiddleware, (req, res) => {
-  const params = new URLSearchParams({
-    client_key: process.env.TIKTOK_CLIENT_ID,
-    redirect_uri: `${getServerUrl()}/api/oauth/tiktok/callback`,
-    scope: 'user.info.basic,video.upload,video.publish',
-    response_type: 'code',
-    state: req.userId,
-  });
-  res.redirect(`https://www.tiktok.com/v2/auth/authorize/?${params.toString()}`);
-});
-
-// GET /api/oauth/tiktok/callback
-router.get('/tiktok/callback', async (req, res) => {
-  const { code, state: userId, error } = req.query;
-
-  if (error || !code) {
-    return res.redirect(`${getClientUrl()}/dashboard?error=tiktok_auth_failed`);
+  if (oauthError) {
+    return res.redirect(`${CLIENT_URL}/oauth-result?error=${encodeURIComponent(oauthError)}`);
   }
 
   try {
-    const response = await axios.post(
-      'https://open.tiktokapis.com/v2/oauth/token/',
-      new URLSearchParams({
-        client_key: process.env.TIKTOK_CLIENT_ID,
-        client_secret: process.env.TIKTOK_CLIENT_SECRET,
+    const { clientId, platform, userId } = jwt.verify(state, process.env.JWT_SECRET);
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.metaAppId || !user?.metaAppSecret) {
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=missing_app_credentials`);
+    }
+
+    const redirectUri = `${process.env.SERVER_URL || 'http://localhost:5000'}/api/oauth/callback`;
+
+    const { data: tokenData } = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+      params: {
+        client_id: user.metaAppId,
+        client_secret: user.metaAppSecret,
+        redirect_uri: redirectUri,
         code,
-        grant_type: 'authorization_code',
-        redirect_uri: `${getServerUrl()}/api/oauth/tiktok/callback`,
-      }),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-
-    const { access_token, refresh_token, expires_in } = response.data;
-
-    await prisma.token.upsert({
-      where: { userId_platform: { userId, platform: 'tiktok' } },
-      update: {
-        accessToken: encrypt(access_token),
-        refreshToken: refresh_token ? encrypt(refresh_token) : null,
-        expiresAt: expires_in ? new Date(Date.now() + expires_in * 1000) : null,
-      },
-      create: {
-        userId,
-        platform: 'tiktok',
-        accessToken: encrypt(access_token),
-        refreshToken: refresh_token ? encrypt(refresh_token) : null,
-        expiresAt: expires_in ? new Date(Date.now() + expires_in * 1000) : null,
       },
     });
 
-    res.redirect(`${getClientUrl()}/dashboard?connected=tiktok`);
-  } catch (err) {
-    console.error('TikTok OAuth callback error:', err.response?.data || err.message);
-    res.redirect(`${getClientUrl()}/dashboard?error=tiktok_auth_failed`);
-  }
-});
+    const longLived = await getLongLivedToken(tokenData.access_token, user.metaAppId, user.metaAppSecret);
+    const longToken = longLived.access_token;
+    const expiresAt = longLived.expires_in
+      ? new Date(Date.now() + longLived.expires_in * 1000)
+      : null;
 
-// ─── STATUS ──────────────────────────────────────────────────────────────────
+    const pages = await getPagesAndIgAccounts(longToken);
 
-// GET /api/oauth/status — check which platforms are connected
-router.get('/status', authMiddleware, async (req, res) => {
-  try {
-    const tokens = await prisma.token.findMany({
-      where: { userId: req.userId },
-      select: { platform: true, expiresAt: true },
-    });
-
-    const status = { youtube: false, instagram: false, tiktok: false };
-    for (const t of tokens) {
-      const expired = t.expiresAt && new Date() > new Date(t.expiresAt);
-      status[t.platform] = !expired;
+    if (pages.length === 0) {
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=no_pages_found`);
     }
 
-    res.json(status);
+    const page = pages[0];
+    const igAccountId = page.instagram_business_account?.id || null;
+
+    const tokenRecord = {
+      clientId,
+      platform,
+      accessToken: platform === 'facebook' ? page.access_token : longToken,
+      expiresAt,
+      pageId: page.id,
+      instagramAccountId: igAccountId,
+    };
+
+    await prisma.clientToken.upsert({
+      where: { clientId_platform: { clientId, platform } },
+      update: tokenRecord,
+      create: tokenRecord,
+    });
+
+    res.redirect(`${CLIENT_URL}/oauth-result?success=true&clientId=${clientId}&platform=${platform}`);
   } catch (err) {
-    console.error('OAuth status error:', err);
-    res.status(500).json({ error: 'Failed to fetch connection status' });
+    console.error('OAuth callback error:', err);
+    res.redirect(`${CLIENT_URL}/oauth-result?error=${encodeURIComponent(err.message)}`);
   }
 });
 
-// DELETE /api/oauth/:platform — disconnect a platform
-router.delete('/:platform', authMiddleware, async (req, res) => {
-  const { platform } = req.params;
-  const valid = ['youtube', 'instagram', 'tiktok'];
-  if (!valid.includes(platform)) {
-    return res.status(400).json({ error: 'Invalid platform' });
-  }
-
+// DELETE /api/oauth/clients/:clientId/tokens/:platform
+router.delete('/clients/:clientId/tokens/:platform', auth, async (req, res) => {
   try {
-    await prisma.token.deleteMany({
-      where: { userId: req.userId, platform },
-    });
+    const { clientId, platform } = req.params;
+    const client = await prisma.client.findFirst({ where: { id: clientId, userId: req.userId } });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    await prisma.clientToken.deleteMany({ where: { clientId, platform } });
     res.json({ message: `${platform} disconnected` });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to disconnect platform' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
 

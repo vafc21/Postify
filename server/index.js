@@ -9,6 +9,7 @@ const settingsRoutes = require('./routes/settings');
 const clientRoutes = require('./routes/clients');
 const campaignRoutes = require('./routes/campaigns');
 const postRoutes = require('./routes/posts');
+const oauthRoutes = require('./routes/oauth');
 const errorHandler = require('./middleware/errorHandler');
 const auth = require('./middleware/authMiddleware');
 const { TEMPLATES } = require('./services/templates');
@@ -37,18 +38,18 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/posts', postRoutes);
+app.use('/api/oauth', oauthRoutes);
 // Spec: GET /api/templates (also available at GET /api/campaigns/templates)
 app.get('/api/templates', auth, (req, res) => res.json(TEMPLATES));
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use(errorHandler);
 
-// OAuth routes added in Phase 2
-// Worker started in Phase 2
-
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  const { startWorker } = require('./services/worker');
+  startWorker();
 }
 
 module.exports = app;
