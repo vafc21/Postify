@@ -8,63 +8,97 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  metaAppId     String?   @map("meta_app_id")
+  metaAppSecret String?   @map("meta_app_secret")
+  theme         String    @default("dark")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  tokens  Token[]
-  apiKeys ApiKey?
-  posts   Post[]
+  clients Client[]
 
   @@map("users")
 }
 
-model Token {
+model Client {
   id           String   @id @default(uuid())
   userId       String   @map("user_id")
-  platform     String
-  accessToken  String   @map("access_token")
-  refreshToken String?  @map("refresh_token")
-  expiresAt    DateTime? @map("expires_at")
+  name         String
+  businessName String?  @map("business_name")
+  logoUrl      String?  @map("logo_url")
+  website      String?
+  industry     String?
+  contactName  String?  @map("contact_name")
+  contactEmail String?  @map("contact_email")
+  notes        String?
   createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokens         ClientToken[]
+  campaigns      Campaign[]
+  scheduledPosts ScheduledPost[]
 
-  @@unique([userId, platform])
-  @@map("tokens")
+  @@map("clients")
 }
 
-model ApiKey {
-  id                     String   @id @default(uuid())
-  userId                 String   @unique @map("user_id")
-  groqKey                String?  @map("groq_key")
-  openaiKey              String?  @map("openai_key")
-  claudeKey              String?  @map("claude_key")
-  preferredTranscription String   @default("groq") @map("preferred_transcription")
-  createdAt              DateTime @default(now()) @map("created_at")
-  updatedAt              DateTime @updatedAt @map("updated_at")
+model ClientToken {
+  id                  String    @id @default(uuid())
+  clientId            String    @map("client_id")
+  platform            String
+  accessToken         String    @map("access_token")
+  refreshToken        String?   @map("refresh_token")
+  expiresAt           DateTime? @map("expires_at")
+  pageId              String?   @map("page_id")
+  instagramAccountId  String?   @map("instagram_account_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  @@map("api_keys")
+  @@unique([clientId, platform])
+  @@map("client_tokens")
 }
 
-model Post {
-  id               String   @id @default(uuid())
-  userId           String   @map("user_id")
-  videoUrl         String?  @map("video_url")
-  description      String?
-  platforms        String[]
-  status           String   @default("pending")
-  youtubeResult    Json?    @map("youtube_result")
-  instagramResult  Json?    @map("instagram_result")
-  tiktokResult     Json?    @map("tiktok_result")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+model Campaign {
+  id              String   @id @default(uuid())
+  clientId        String   @map("client_id")
+  name            String
+  description     String?
+  type            String   @default("custom")
+  presetTemplate  String?  @map("preset_template")
+  frequency       String
+  timesPerCycle   Int      @default(1) @map("times_per_cycle")
+  scheduleConfig  Json     @map("schedule_config")
+  postToInstagram Boolean  @default(true) @map("post_to_instagram")
+  postToFacebook  Boolean  @default(true) @map("post_to_facebook")
+  postToStory     Boolean  @default(true) @map("post_to_story")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  scheduledPosts ScheduledPost[]
 
-  @@map("posts")
+  @@map("campaigns")
+}
+
+model ScheduledPost {
+  id              String   @id @default(uuid())
+  campaignId      String   @map("campaign_id")
+  clientId        String   @map("client_id")
+  scheduledFor    DateTime @map("scheduled_for")
+  mediaType       String?  @map("media_type")
+  mediaUrls       String[] @map("media_urls")
+  caption         String?
+  postToStory     Boolean  @default(true) @map("post_to_story")
+  status          String   @default("pending")
+  instagramResult Json?    @map("instagram_result")
+  facebookResult  Json?    @map("facebook_result")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  client   Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("scheduled_posts")
 }
