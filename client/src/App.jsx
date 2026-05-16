@@ -1,65 +1,51 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from './hooks/useAuth';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
+import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import Upload from './pages/Upload';
+import ClientProfile from './pages/ClientProfile';
+import CampaignView from './pages/CampaignView';
 import Settings from './pages/Settings';
-import { Loader2 } from 'lucide-react';
+import OAuthResult from './pages/OAuthResult';
 
-function ProtectedRoute({ children }) {
+function AppRoutes() {
   const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0f0f13] flex items-center justify-center">
-        <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--text-muted)' }}>Loading...</div>;
 
   if (!user) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return children;
-}
-
-function PublicRoute({ children }) {
-  const { user, loading } = useAuth();
-
-  if (loading) {
     return (
-      <div className="min-h-screen bg-[#0f0f13] flex items-center justify-center">
-        <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
-      </div>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
     );
   }
 
-  if (user) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  return children;
+  return (
+    <ThemeProvider initialTheme={user.theme || 'dark'}>
+      <Routes>
+        <Route path="/oauth-result" element={<OAuthResult />} />
+        <Route element={<Layout />}>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/clients/:id" element={<ClientProfile />} />
+          <Route path="/campaigns/:id" element={<CampaignView />} />
+          <Route path="/settings" element={<Settings />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </ThemeProvider>
+  );
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        {/* Public */}
-        <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-        <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
-
-        {/* Protected */}
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/upload" element={<ProtectedRoute><Upload /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-
-        {/* Default */}
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
     </BrowserRouter>
   );
 }
