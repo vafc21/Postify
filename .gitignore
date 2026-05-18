@@ -12,6 +12,7 @@ server/.env
 # Build output
 client/dist/
 client/build/
+server/public/
 
 # Uploads (temp files — never commit)
 server/uploads/
