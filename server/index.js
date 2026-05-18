@@ -43,7 +43,7 @@ app.use('/api/oauth', oauthRoutes);
 app.get('/api/templates', auth, (req, res) => res.json(TEMPLATES));
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-const clientDistPath = path.join(__dirname, '../client/dist');
+const clientDistPath = path.join(__dirname, 'public');
 app.use(express.static(clientDistPath));
 app.get('*', (req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));

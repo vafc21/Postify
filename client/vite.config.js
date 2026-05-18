@@ -8,13 +8,13 @@ export default defineConfig({
     react(),
   ],
   build: {
-    emptyOutDir: false,
-    outDir: 'dist',
+    emptyOutDir: true,
+    outDir: process.env.NODE_ENV === 'production' ? '../server/public' : 'dist',
   },
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'http://localhost:5001',
         changeOrigin: true,
       },
     },
