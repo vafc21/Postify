@@ -65,13 +65,12 @@ async function seedAdminUser() {
 
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'test') {
-  seedAdminUser().then(() => {
+  seedAdminUser().catch(err => {
+    console.error('Warning: failed to seed admin user:', err.message);
+  }).finally(() => {
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
     const { startWorker } = require('./services/worker');
     startWorker();
-  }).catch(err => {
-    console.error('Failed to seed admin user:', err);
-    process.exit(1);
   });
 }
 

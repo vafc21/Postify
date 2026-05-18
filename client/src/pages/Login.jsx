@@ -25,7 +25,8 @@ export default function Login() {
   return (
     <div style={pageStyle}>
       <div style={cardStyle}>
-        <div style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 22, letterSpacing: 1, marginBottom: 8 }}>POSTIFY</div>
+        <div style={{ fontWeight: 900, fontSize: 20, letterSpacing: 0.5, lineHeight: 1.1, color: 'var(--text)', textTransform: 'uppercase', marginBottom: 4 }}>RJ SEBEK<br />MARKETING</div>
+        <div style={{ fontWeight: 700, fontSize: 10, letterSpacing: 2, color: '#f5c518', textTransform: 'uppercase', marginBottom: 20 }}>CLIENT POSTING HUB</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 24 }}>Sign in to your account</div>
         {error && <div style={errorStyle}>{error}</div>}
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

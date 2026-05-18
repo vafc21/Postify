@@ -29,7 +29,8 @@ export default function Sidebar() {
         flexDirection: 'column', height: '100vh',
       }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>POSTIFY</span>
+          <div style={{ fontWeight: 900, fontSize: 15, letterSpacing: 0.5, lineHeight: 1.1, color: 'var(--text)', textTransform: 'uppercase' }}>RJ SEBEK<br />MARKETING</div>
+          <div style={{ fontWeight: 700, fontSize: 9, letterSpacing: 1.5, color: '#f5c518', textTransform: 'uppercase', marginTop: 4 }}>CLIENT POSTING HUB</div>
         </div>
 
         <div style={{ padding: '8px' }}>
