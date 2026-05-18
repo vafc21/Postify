@@ -4,7 +4,7 @@ services:
     name: postify-server
     runtime: node
     rootDir: server
-    buildCommand: npm install && npx prisma generate && npx prisma migrate deploy
+    buildCommand: npm install && npx prisma generate && npx prisma db push
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -18,7 +18,11 @@ services:
       - key: SERVER_URL
         sync: false   # Set to your Render backend URL, e.g. https://postify-server.onrender.com
       - key: CLIENT_URL
-        sync: false   # Set to your Render frontend URL, e.g. https://postify.onrender.com
+        sync: false   # Set to your Render frontend URL, e.g. https://postify-client.onrender.com
+      - key: ADMIN_EMAIL
+        sync: false   # Login email for the admin account
+      - key: ADMIN_PASSWORD
+        sync: false   # Login password for the admin account
 
   # ─── Frontend (Static Site) ───────────────────────────────────────────────
   - type: web
