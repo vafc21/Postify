@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, RefreshCw } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, Trash2 } from 'lucide-react';
 import api from '../api';
 import CampaignWizard from '../components/CampaignWizard';
+import NewClientModal from '../components/NewClientModal';
 
 export default function ClientProfile() {
   const { id } = useParams();
@@ -10,6 +11,7 @@ export default function ClientProfile() {
   const [client, setClient] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
@@ -60,6 +62,23 @@ export default function ClientProfile() {
     navigate(`/campaigns/${campaign.id}`);
   };
 
+  const handleClientUpdated = (updated) => {
+    setClient(prev => ({ ...prev, ...updated }));
+    setShowEdit(false);
+    window.dispatchEvent(new Event('clients-changed'));
+  };
+
+  const deleteClient = async () => {
+    if (!confirm(`Delete ${client.name}? This permanently removes the client and all their campaigns and scheduled posts. This cannot be undone.`)) return;
+    try {
+      await api.delete(`/clients/${id}`);
+      window.dispatchEvent(new Event('clients-changed'));
+      navigate('/');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete client');
+    }
+  };
+
   if (loading) return <div style={loadingStyle}>Loading...</div>;
   if (!client) return <div style={loadingStyle}>Client not found</div>;
 
@@ -78,9 +97,13 @@ export default function ClientProfile() {
             <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>{client.businessName || ''}{client.website ? ` · ${client.website}` : ''}</p>
           </div>
         </div>
-        <button onClick={() => setShowWizard(true)} style={primaryBtn}>
-          <Plus size={14} /> New Campaign
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setShowEdit(true)} style={ghostBtn}><Pencil size={12} /> Edit</button>
+          <button onClick={deleteClient} style={dangerBtn}><Trash2 size={12} /> Delete</button>
+          <button onClick={() => setShowWizard(true)} style={primaryBtn}>
+            <Plus size={14} /> New Campaign
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -135,6 +158,9 @@ export default function ClientProfile() {
       {showWizard && (
         <CampaignWizard clientId={id} onClose={() => setShowWizard(false)} onCreated={handleCampaignCreated} />
       )}
+      {showEdit && (
+        <NewClientModal client={client} onClose={() => setShowEdit(false)} onCreated={handleClientUpdated} />
+      )}
     </div>
   );
 }
@@ -182,3 +208,4 @@ const infoCard = { background: 'var(--bg)', border: '1px solid var(--border)', b
 const loadingStyle = { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' };
 const primaryBtn = { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 6, background: 'var(--primary)', color: '#fff', fontWeight: 600, border: 'none', cursor: 'pointer', fontSize: 12 };
 const ghostBtn = { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 6, background: 'var(--bg-3)', color: 'var(--text-muted)', border: 'none', cursor: 'pointer', fontSize: 11 };
+const dangerBtn = { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 6, background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', cursor: 'pointer', fontSize: 11 };

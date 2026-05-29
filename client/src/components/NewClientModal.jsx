@@ -2,8 +2,17 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import api from '../api';
 
-export default function NewClientModal({ onClose, onCreated }) {
-  const [form, setForm] = useState({ name: '', businessName: '', website: '', industry: '', contactName: '', contactEmail: '', notes: '' });
+export default function NewClientModal({ onClose, onCreated, client }) {
+  const isEdit = !!client;
+  const [form, setForm] = useState({
+    name: client?.name || '',
+    businessName: client?.businessName || '',
+    website: client?.website || '',
+    industry: client?.industry || '',
+    contactName: client?.contactName || '',
+    contactEmail: client?.contactEmail || '',
+    notes: client?.notes || '',
+  });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -14,10 +23,12 @@ export default function NewClientModal({ onClose, onCreated }) {
     if (!form.name.trim()) return setError('Client name is required');
     setError(''); setLoading(true);
     try {
-      const { data } = await api.post('/clients', form);
+      const { data } = isEdit
+        ? await api.put(`/clients/${client.id}`, form)
+        : await api.post('/clients', form);
       onCreated(data);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create client');
+      setError(err.response?.data?.error || `Failed to ${isEdit ? 'update' : 'create'} client`);
     } finally {
       setLoading(false);
     }
@@ -27,7 +38,7 @@ export default function NewClientModal({ onClose, onCreated }) {
     <div style={overlayStyle} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <span style={{ color: 'var(--text)', fontWeight: 600, fontSize: 15 }}>Add New Client</span>
+          <span style={{ color: 'var(--text)', fontWeight: 600, fontSize: 15 }}>{isEdit ? 'Edit Client' : 'Add New Client'}</span>
           <button onClick={onClose} style={iconBtnStyle}><X size={16} /></button>
         </div>
         {error && <div style={errorStyle}>{error}</div>}
@@ -48,12 +59,16 @@ export default function NewClientModal({ onClose, onCreated }) {
             <label style={labelStyle}>Notes</label>
             <textarea style={{ ...inputStyle, height: 60, resize: 'vertical' }} value={form.notes} onChange={set('notes')} placeholder="Optional notes..." />
           </div>
-          <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
-            ℹ Instagram and Facebook accounts are connected after the client is created, from their profile page.
-          </div>
+          {!isEdit && (
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+              ℹ Instagram and Facebook accounts are connected after the client is created, from their profile page.
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
             <button type="button" onClick={onClose} style={cancelBtnStyle}>Cancel</button>
-            <button type="submit" style={submitBtnStyle} disabled={loading}>{loading ? 'Creating...' : 'Create Client →'}</button>
+            <button type="submit" style={submitBtnStyle} disabled={loading}>
+              {loading ? (isEdit ? 'Saving...' : 'Creating...') : (isEdit ? 'Save Changes' : 'Create Client →')}
+            </button>
           </div>
         </form>
       </div>

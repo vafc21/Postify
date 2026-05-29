@@ -12,7 +12,10 @@ export default function Sidebar() {
   const [showNewClient, setShowNewClient] = useState(false);
 
   useEffect(() => {
-    api.get('/clients').then(r => setClients(r.data)).catch(() => {});
+    const loadClients = () => api.get('/clients').then(r => setClients(r.data)).catch(() => {});
+    loadClients();
+    window.addEventListener('clients-changed', loadClients);
+    return () => window.removeEventListener('clients-changed', loadClients);
   }, []);
 
   const handleClientCreated = (client) => {
