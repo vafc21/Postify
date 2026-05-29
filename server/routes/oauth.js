@@ -52,8 +52,15 @@ router.get('/callback', async (req, res) => {
     return res.redirect(`${CLIENT_URL}/oauth-result?error=${encodeURIComponent(oauthError)}`);
   }
 
+  let clientId, platform, userId;
   try {
-    const { clientId, platform, userId } = jwt.verify(state, process.env.JWT_SECRET);
+    ({ clientId, platform, userId } = jwt.verify(state, process.env.JWT_SECRET));
+  } catch (err) {
+    console.error('OAuth state verification failed:', err.message);
+    return res.redirect(`${CLIENT_URL}/oauth-result?error=invalid_state`);
+  }
+
+  try {
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user?.metaAppId || !user?.metaAppSecret) {
@@ -63,22 +70,41 @@ router.get('/callback', async (req, res) => {
     const redirectUri = `${process.env.SERVER_URL || 'http://localhost:5000'}/api/oauth/callback`;
     const appSecret = decrypt(user.metaAppSecret);
 
-    const { data: tokenData } = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
-      params: {
-        client_id: user.metaAppId,
-        client_secret: appSecret,
-        redirect_uri: redirectUri,
-        code,
-      },
-    });
+    let tokenData;
+    try {
+      const response = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+        params: {
+          client_id: user.metaAppId,
+          client_secret: appSecret,
+          redirect_uri: redirectUri,
+          code,
+        },
+      });
+      tokenData = response.data;
+    } catch (err) {
+      console.error('OAuth token exchange failed:', err.response?.data || err.message);
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=token_exchange_failed`);
+    }
 
-    const longLived = await getLongLivedToken(tokenData.access_token, user.metaAppId, appSecret);
+    let longLived;
+    try {
+      longLived = await getLongLivedToken(tokenData.access_token, user.metaAppId, appSecret);
+    } catch (err) {
+      console.error('Long-lived token exchange failed:', err.response?.data || err.message);
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=long_token_failed`);
+    }
     const longToken = longLived.access_token;
     const expiresAt = longLived.expires_in
       ? new Date(Date.now() + longLived.expires_in * 1000)
       : null;
 
-    const pages = await getPagesAndIgAccounts(longToken);
+    let pages;
+    try {
+      pages = await getPagesAndIgAccounts(longToken);
+    } catch (err) {
+      console.error('Get pages failed:', err.response?.data || err.message);
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=pages_fetch_failed`);
+    }
 
     if (pages.length === 0) {
       return res.redirect(`${CLIENT_URL}/oauth-result?error=no_pages_found`);
