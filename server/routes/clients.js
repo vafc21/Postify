@@ -144,6 +144,8 @@ router.post('/:id/campaigns', auth, async (req, res) => {
     const client = await prisma.client.findFirst({ where: { id: req.params.id, userId: req.userId } });
     if (!client) return res.status(404).json({ error: 'Client not found' });
 
+    const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { timezone: true } });
+
     let {
       name, description, type, presetTemplate,
       frequency, timesPerCycle, scheduleConfig,
@@ -191,7 +193,7 @@ router.post('/:id/campaigns', auth, async (req, res) => {
 
     const daysUntilEnd = Math.ceil((resolvedEndDate - new Date()) / (24 * 60 * 60 * 1000));
     const generationWindow = Math.max(1, Math.min(60, daysUntilEnd));
-    const slots = generateSlots(campaign, new Date(), generationWindow);
+    const slots = generateSlots(campaign, new Date(), generationWindow, { timezone: user?.timezone });
     if (slots.length > 0) {
       await prisma.scheduledPost.createMany({ data: slots });
     }

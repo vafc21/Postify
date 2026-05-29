@@ -3,11 +3,11 @@ import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '../api';
 
 const PRESETS = [
-  { key: 'brand_awareness', name: 'Brand Awareness', desc: '1× daily' },
-  { key: 'daily_tips', name: 'Daily Tips', desc: '1× daily at 9am' },
-  { key: 'weekly_highlight', name: 'Weekly Highlight', desc: '1× weekly, Friday' },
-  { key: 'product_launch', name: 'Product Launch', desc: '3× daily' },
-  { key: 'monthly_recap', name: 'Monthly Recap', desc: '1× monthly, 1st' },
+  { key: 'brand_awareness', name: 'Brand Awareness', desc: '1× daily at 9am', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
+  { key: 'daily_tips', name: 'Daily Tips', desc: '1× daily at 9am', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
+  { key: 'weekly_highlight', name: 'Weekly Highlight', desc: '1× weekly, Friday 12pm', frequency: 'weekly', timesPerCycle: 1, scheduleConfig: { days: ['friday'], time: '12:00' } },
+  { key: 'product_launch', name: 'Product Launch', desc: '3× daily', frequency: 'daily', timesPerCycle: 3, scheduleConfig: { times: ['09:00', '13:00', '18:00'] } },
+  { key: 'monthly_recap', name: 'Monthly Recap', desc: '1× monthly, 1st at 10am', frequency: 'monthly', timesPerCycle: 1, scheduleConfig: { date: 1, time: '10:00' } },
 ];
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -33,15 +33,27 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
 
   const set = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
+  const isPreset = form.type === 'preset';
+  const totalSteps = isPreset ? 3 : 5;
+  const visibleStep = step <= 2 ? step : (isPreset ? 3 : step);
+
   const next = () => {
     if (step === 1) {
       if (!form.name.trim()) return setError('Campaign name is required');
       if (!form.endDate) return setError('End date is required');
       if (new Date(form.endDate) <= new Date()) return setError('End date must be in the future');
     }
-    setError(''); setStep(s => Math.min(s + 1, 5));
+    if (step === 2 && isPreset && !form.presetTemplate) return setError('Pick a template or choose Custom');
+    setError('');
+    // Skip schedule steps when using a preset — the template already has them
+    if (step === 2 && isPreset) return setStep(5);
+    setStep(s => Math.min(s + 1, 5));
   };
-  const back = () => { setError(''); setStep(s => Math.max(s - 1, 1)); };
+  const back = () => {
+    setError('');
+    if (step === 5 && isPreset) return setStep(2);
+    setStep(s => Math.max(s - 1, 1));
+  };
 
   const handleSubmit = async () => {
     setLoading(true); setError('');
@@ -77,13 +89,13 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
     <div style={overlayStyle} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <span style={{ color: 'var(--text)', fontWeight: 600, fontSize: 15 }}>New Campaign — Step {step} of 5</span>
+          <span style={{ color: 'var(--text)', fontWeight: 600, fontSize: 15 }}>New Campaign — Step {visibleStep} of {totalSteps}</span>
           <button onClick={onClose} style={iconBtn}><X size={16} /></button>
         </div>
 
         <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
-          {[1,2,3,4,5].map(s => (
-            <div key={s} style={{ flex: 1, height: 3, borderRadius: 2, background: s <= step ? 'var(--primary)' : 'var(--border)' }} />
+          {Array.from({ length: totalSteps }, (_, i) => i + 1).map(s => (
+            <div key={s} style={{ flex: 1, height: 3, borderRadius: 2, background: s <= visibleStep ? 'var(--primary)' : 'var(--border)' }} />
           ))}
         </div>
 
@@ -104,13 +116,22 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
         {step === 2 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Label>Choose a type</Label>
-            <div onClick={() => set('type', 'custom')} style={optionCard(form.type === 'custom')}>
+            <div onClick={() => setForm(f => ({ ...f, type: 'custom', presetTemplate: '' }))} style={optionCard(form.type === 'custom')}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>✏️ Custom Campaign</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Build your own schedule from scratch</div>
             </div>
             <div style={{ color: 'var(--text-muted)', fontSize: 10, fontWeight: 700, letterSpacing: 1, margin: '8px 0 4px', textTransform: 'uppercase' }}>Preset Templates</div>
             {PRESETS.map(p => (
-              <div key={p.key} onClick={() => { set('type', 'preset'); set('presetTemplate', p.key); }} style={optionCard(form.type === 'preset' && form.presetTemplate === p.key)}>
+              <div key={p.key} onClick={() => {
+                setForm(f => ({
+                  ...f,
+                  type: 'preset',
+                  presetTemplate: p.key,
+                  frequency: p.frequency,
+                  timesPerCycle: p.timesPerCycle,
+                  scheduleConfig: p.scheduleConfig,
+                }));
+              }} style={optionCard(form.type === 'preset' && form.presetTemplate === p.key)}>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>📋 {p.name}</div>
                 <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.desc}</div>
               </div>
@@ -211,9 +232,9 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
           <button onClick={back} disabled={step === 1} style={step === 1 ? { ...ghostBtn, opacity: 0.4 } : ghostBtn}>
             <ChevronLeft size={14} /> Back
           </button>
-          {step < 5
-            ? <button onClick={next} style={primaryBtn}>Next <ChevronRight size={14} /></button>
-            : <button onClick={handleSubmit} style={primaryBtn} disabled={loading}>{loading ? 'Creating...' : 'Create Campaign ✓'}</button>
+          {step === 5
+            ? <button onClick={handleSubmit} style={primaryBtn} disabled={loading}>{loading ? 'Creating...' : 'Create Campaign ✓'}</button>
+            : <button onClick={next} style={primaryBtn}>Next <ChevronRight size={14} /></button>
           }
         </div>
       </div>
