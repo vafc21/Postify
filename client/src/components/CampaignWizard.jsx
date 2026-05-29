@@ -3,11 +3,11 @@ import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '../api';
 
 const PRESETS = [
-  { key: 'brand_awareness', name: 'Brand Awareness', desc: '1× daily at 9am', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
-  { key: 'daily_tips', name: 'Daily Tips', desc: '1× daily at 9am', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
-  { key: 'weekly_highlight', name: 'Weekly Highlight', desc: '1× weekly, Friday 12pm', frequency: 'weekly', timesPerCycle: 1, scheduleConfig: { days: ['friday'], time: '12:00' } },
-  { key: 'product_launch', name: 'Product Launch', desc: '3× daily', frequency: 'daily', timesPerCycle: 3, scheduleConfig: { times: ['09:00', '13:00', '18:00'] } },
-  { key: 'monthly_recap', name: 'Monthly Recap', desc: '1× monthly, 1st at 10am', frequency: 'monthly', timesPerCycle: 1, scheduleConfig: { date: 1, time: '10:00' } },
+  { key: 'brand_awareness', name: 'Brand Awareness', desc: '1× daily — pick the time', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
+  { key: 'daily_tips', name: 'Daily Tips', desc: '1× daily — pick the time', frequency: 'daily', timesPerCycle: 1, scheduleConfig: { times: ['09:00'] } },
+  { key: 'weekly_highlight', name: 'Weekly Highlight', desc: '1× weekly — pick day & time', frequency: 'weekly', timesPerCycle: 1, scheduleConfig: { days: ['friday'], time: '12:00' } },
+  { key: 'product_launch', name: 'Product Launch', desc: '3× daily — pick the times', frequency: 'daily', timesPerCycle: 3, scheduleConfig: { times: ['09:00', '13:00', '18:00'] } },
+  { key: 'monthly_recap', name: 'Monthly Recap', desc: '1× monthly — pick date & time', frequency: 'monthly', timesPerCycle: 1, scheduleConfig: { date: 1, time: '10:00' } },
 ];
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -34,8 +34,9 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
   const set = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   const isPreset = form.type === 'preset';
-  const totalSteps = isPreset ? 3 : 5;
-  const visibleStep = step <= 2 ? step : (isPreset ? 3 : step);
+  const totalSteps = isPreset ? 4 : 5;
+  // Presets skip step 3 (frequency picker); remaining steps shift up by 1
+  const visibleStep = isPreset && step >= 4 ? step - 1 : step;
 
   const next = () => {
     if (step === 1) {
@@ -45,13 +46,13 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
     }
     if (step === 2 && isPreset && !form.presetTemplate) return setError('Pick a template or choose Custom');
     setError('');
-    // Skip schedule steps when using a preset — the template already has them
-    if (step === 2 && isPreset) return setStep(5);
+    // Presets pick the frequency for you — jump from step 2 (type) straight to step 4 (times)
+    if (step === 2 && isPreset) return setStep(4);
     setStep(s => Math.min(s + 1, 5));
   };
   const back = () => {
     setError('');
-    if (step === 5 && isPreset) return setStep(2);
+    if (step === 4 && isPreset) return setStep(2);
     setStep(s => Math.max(s - 1, 1));
   };
 
@@ -162,7 +163,12 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
 
         {step === 4 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Label>Set your schedule</Label>
+            <Label>{isPreset ? `Customize ${PRESETS.find(p => p.key === form.presetTemplate)?.name || ''} schedule` : 'Set your schedule'}</Label>
+            {isPreset && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                Pre-filled from the template — adjust the times to fit your client.
+              </div>
+            )}
             {form.frequency === 'daily' && (
               <>
                 <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Post times (each day):</div>
