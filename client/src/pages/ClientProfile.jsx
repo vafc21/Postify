@@ -128,7 +128,11 @@ export default function ClientProfile() {
         <div>
           <SectionLabel>Campaigns ({campaigns.length})</SectionLabel>
           {campaigns.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>No campaigns yet. Create one to get started.</div>}
-          {campaigns.map(c => (
+          {campaigns.map(c => {
+            const daysLeft = c.endDate ? Math.ceil((new Date(c.endDate) - new Date()) / 86400000) : null;
+            const endingSoon = daysLeft !== null && daysLeft >= 0 && daysLeft <= 7;
+            const expired = daysLeft !== null && daysLeft < 0;
+            return (
             <div key={c.id} onClick={() => navigate(`/campaigns/${c.id}`)}
               style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 8, cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -138,9 +142,16 @@ export default function ClientProfile() {
                     {c.timesPerCycle}× {c.frequency} · {[c.postToInstagram && 'IG', c.postToFacebook && 'FB'].filter(Boolean).join(' + ')}{c.postToStory ? ' + Story' : ''}
                   </div>
                 </div>
-                <span style={{ background: c.isActive ? '#0d4429' : 'var(--bg-3)', color: c.isActive ? 'var(--success)' : 'var(--text-muted)', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 600 }}>
-                  {c.isActive ? 'Active' : 'Paused'}
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  <span style={{ background: c.isActive ? '#0d4429' : 'var(--bg-3)', color: c.isActive ? 'var(--success)' : 'var(--text-muted)', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 600 }}>
+                    {c.isActive ? 'Active' : 'Paused'}
+                  </span>
+                  {(endingSoon || expired) && (
+                    <span style={{ background: expired ? '#2d1212' : '#332100', color: expired ? 'var(--danger)' : 'var(--warning)', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 600 }}>
+                      {expired ? 'Ended' : `${daysLeft}d left`}
+                    </span>
+                  )}
+                </div>
               </div>
               {c._count && (
                 <div style={{ marginTop: 8 }}>
@@ -151,7 +162,8 @@ export default function ClientProfile() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

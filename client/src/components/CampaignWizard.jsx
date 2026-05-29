@@ -12,6 +12,12 @@ const PRESETS = [
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+function defaultEndDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function CampaignWizard({ clientId, onClose, onCreated }) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({
@@ -20,6 +26,7 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
     frequency: 'daily', timesPerCycle: 1,
     scheduleConfig: { times: ['09:00'] },
     postToInstagram: true, postToFacebook: true, postToStory: true,
+    endDate: defaultEndDate(),
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,7 +34,11 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
   const set = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
   const next = () => {
-    if (step === 1 && !form.name.trim()) return setError('Campaign name is required');
+    if (step === 1) {
+      if (!form.name.trim()) return setError('Campaign name is required');
+      if (!form.endDate) return setError('End date is required');
+      if (new Date(form.endDate) <= new Date()) return setError('End date must be in the future');
+    }
     setError(''); setStep(s => Math.min(s + 1, 5));
   };
   const back = () => { setError(''); setStep(s => Math.max(s - 1, 1)); };
@@ -84,6 +95,9 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
             <input style={inputStyle} value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Summer Promo" autoFocus />
             <Label>Description</Label>
             <textarea style={{ ...inputStyle, height: 60, resize: 'vertical' }} value={form.description} onChange={e => set('description', e.target.value)} placeholder="Optional..." />
+            <Label>End Date *</Label>
+            <input type="date" style={inputStyle} value={form.endDate} onChange={e => set('endDate', e.target.value)} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} />
+            <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>Defaults to one month from today. You can change this anytime after creating the campaign.</div>
           </div>
         )}
 

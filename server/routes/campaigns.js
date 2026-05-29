@@ -53,14 +53,35 @@ router.put('/:id', auth, async (req, res) => {
     });
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
-    const { name, description, isActive } = req.body;
+    const { name, description, isActive, endDate } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (description !== undefined) data.description = description;
     if (isActive !== undefined) data.isActive = isActive;
+    if (endDate !== undefined) {
+      if (endDate === null) {
+        data.endDate = null;
+      } else {
+        const parsed = new Date(endDate);
+        if (isNaN(parsed.getTime())) return res.status(400).json({ error: 'Invalid end date' });
+        data.endDate = parsed;
+      }
+    }
 
     // Ownership verified by findFirst above via client.userId; TOCTOU window is acceptable here
     const updated = await prisma.campaign.update({ where: { id: req.params.id }, data });
+
+    // If the end date was shortened, remove pending (no media) future slots beyond it
+    if (data.endDate) {
+      await prisma.scheduledPost.deleteMany({
+        where: {
+          campaignId: req.params.id,
+          status: 'pending',
+          scheduledFor: { gt: data.endDate },
+        },
+      });
+    }
+
     res.json(updated);
   } catch (err) {
     console.error(err);

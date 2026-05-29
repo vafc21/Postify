@@ -148,11 +148,20 @@ router.post('/:id/campaigns', auth, async (req, res) => {
       name, description, type, presetTemplate,
       frequency, timesPerCycle, scheduleConfig,
       postToInstagram, postToFacebook, postToStory,
+      endDate,
     } = req.body;
 
     if (!name) return res.status(400).json({ error: 'Campaign name is required' });
     if (!frequency) return res.status(400).json({ error: 'Frequency is required' });
     if (!scheduleConfig) return res.status(400).json({ error: 'Schedule config is required' });
+
+    // Default: one month from now if no end date provided
+    const resolvedEndDate = endDate
+      ? new Date(endDate)
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    if (isNaN(resolvedEndDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid end date' });
+    }
 
     if (type === 'preset' && presetTemplate) {
       const tmpl = getTemplate(presetTemplate);
@@ -176,10 +185,13 @@ router.post('/:id/campaigns', auth, async (req, res) => {
         postToInstagram: postToInstagram ?? true,
         postToFacebook: postToFacebook ?? true,
         postToStory: postToStory ?? true,
+        endDate: resolvedEndDate,
       },
     });
 
-    const slots = generateSlots(campaign, new Date(), 60);
+    const daysUntilEnd = Math.ceil((resolvedEndDate - new Date()) / (24 * 60 * 60 * 1000));
+    const generationWindow = Math.max(1, Math.min(60, daysUntilEnd));
+    const slots = generateSlots(campaign, new Date(), generationWindow);
     if (slots.length > 0) {
       await prisma.scheduledPost.createMany({ data: slots });
     }

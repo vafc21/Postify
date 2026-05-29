@@ -9,7 +9,9 @@ const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
  */
 function generateSlots(campaign, fromDate, days) {
   const slots = [];
-  const { frequency, scheduleConfig, id: campaignId, clientId, postToStory } = campaign;
+  const { frequency, scheduleConfig, id: campaignId, clientId, postToStory, endDate } = campaign;
+  const cutoff = endDate ? new Date(endDate) : null;
+  const within = (dt) => !cutoff || dt <= cutoff;
 
   if (frequency === 'daily') {
     const times = scheduleConfig.times || ['09:00'];
@@ -19,7 +21,7 @@ function generateSlots(campaign, fromDate, days) {
         const dt = new Date(fromDate);
         dt.setUTCDate(dt.getUTCDate() + d);
         dt.setUTCHours(hours, minutes, 0, 0);
-        if (dt > new Date()) {
+        if (dt > new Date() && within(dt)) {
           slots.push(makeSlot(campaignId, clientId, dt, postToStory));
         }
       }
@@ -32,7 +34,7 @@ function generateSlots(campaign, fromDate, days) {
       dt.setUTCDate(dt.getUTCDate() + d);
       if (targetDays.includes(dt.getUTCDay())) {
         dt.setUTCHours(hours, minutes, 0, 0);
-        if (dt > new Date()) {
+        if (dt > new Date() && within(dt)) {
           slots.push(makeSlot(campaignId, clientId, dt, postToStory));
         }
       }
@@ -45,7 +47,7 @@ function generateSlots(campaign, fromDate, days) {
       dt.setUTCDate(dt.getUTCDate() + d);
       if (dt.getUTCDate() === targetDate) {
         dt.setUTCHours(hours, minutes, 0, 0);
-        if (dt > new Date()) {
+        if (dt > new Date() && within(dt)) {
           slots.push(makeSlot(campaignId, clientId, dt, postToStory));
         }
       }

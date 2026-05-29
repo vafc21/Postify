@@ -76,6 +76,7 @@ model Campaign {
   postToFacebook  Boolean  @default(true) @map("post_to_facebook")
   postToStory     Boolean  @default(true) @map("post_to_story")
   isActive        Boolean  @default(true) @map("is_active")
+  endDate         DateTime? @map("end_date")
   createdAt       DateTime @default(now()) @map("created_at")
 
   client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
