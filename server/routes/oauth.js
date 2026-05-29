@@ -4,6 +4,7 @@ const axios = require('axios');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
 const { getLongLivedToken, getPagesAndIgAccounts } = require('../services/meta');
+const { decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -60,17 +61,18 @@ router.get('/callback', async (req, res) => {
     }
 
     const redirectUri = `${process.env.SERVER_URL || 'http://localhost:5000'}/api/oauth/callback`;
+    const appSecret = decrypt(user.metaAppSecret);
 
     const { data: tokenData } = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
       params: {
         client_id: user.metaAppId,
-        client_secret: user.metaAppSecret,
+        client_secret: appSecret,
         redirect_uri: redirectUri,
         code,
       },
     });
 
-    const longLived = await getLongLivedToken(tokenData.access_token, user.metaAppId, user.metaAppSecret);
+    const longLived = await getLongLivedToken(tokenData.access_token, user.metaAppId, appSecret);
     const longToken = longLived.access_token;
     const expiresAt = longLived.expires_in
       ? new Date(Date.now() + longLived.expires_in * 1000)
