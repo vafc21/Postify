@@ -4,8 +4,8 @@ const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
  * Convert a wall-clock time in the given IANA timezone to a UTC Date.
  * Handles DST automatically. Falls back to UTC if tz === 'UTC' or invalid.
  */
-function localTimeToUtc(year, month, day, hours, minutes, tz) {
-  const naive = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+function localTimeToUtc(year, month, day, hours, minutes, tz, seconds = 0, ms = 0) {
+  const naive = new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds, ms));
   if (!tz || tz === 'UTC') return naive;
   try {
     const fmt = new Intl.DateTimeFormat('en-US', {
@@ -116,4 +116,23 @@ function makeSlot(campaignId, clientId, scheduledFor, postToStory) {
   };
 }
 
-module.exports = { generateSlots };
+/**
+ * Convert a YYYY-MM-DD date (or Date object) to the UTC instant of
+ * end-of-day (23:59:59.999) in the given IANA timezone. Used to clamp
+ * campaign end dates so the last day is included in the user's tz.
+ */
+function endOfDayInTz(dateInput, tz) {
+  if (!dateInput) return null;
+  let y, m, d;
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dateInput)) {
+    [y, m, d] = dateInput.slice(0, 10).split('-').map(Number);
+  } else {
+    const parsed = new Date(dateInput);
+    if (isNaN(parsed.getTime())) return null;
+    const iso = parsed.toLocaleDateString('en-CA', { timeZone: tz || 'UTC' });
+    [y, m, d] = iso.split('-').map(Number);
+  }
+  return localTimeToUtc(y, m, d, 23, 59, tz, 59, 999);
+}
+
+module.exports = { generateSlots, endOfDayInTz };

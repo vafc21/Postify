@@ -20,7 +20,7 @@ export default function OAuthResult() {
 
   useEffect(() => {
     if (window.opener) {
-      window.opener.postMessage({ type: 'oauth-result', success, error, clientId }, '*');
+      window.opener.postMessage({ type: 'oauth-result', success, error, clientId }, window.location.origin);
       if (success) window.close();
     }
   }, [success, error, clientId]);

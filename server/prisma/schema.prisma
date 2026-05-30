@@ -99,6 +99,7 @@ model ScheduledPost {
   storyLink       String?  @map("story_link")
   thumbOffset     Int?     @map("thumb_offset")
   status          String   @default("pending")
+  attempts        Int      @default(0)
   instagramResult Json?    @map("instagram_result")
   facebookResult  Json?    @map("facebook_result")
   createdAt       DateTime @default(now()) @map("created_at")

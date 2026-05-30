@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { readToken } = require('../utils/encryption');
 
 const GRAPH = 'https://graph.facebook.com/v18.0';
 
@@ -12,7 +13,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     try {
       results.instagramResult = await publishToInstagram({
         igUserId: igToken.instagramAccountId,
-        accessToken: igToken.accessToken,
+        accessToken: readToken(igToken.accessToken),
         post,
         serverUrl,
       });
@@ -25,7 +26,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     try {
       results.facebookResult = await publishToFacebook({
         pageId: fbToken.pageId,
-        accessToken: fbToken.accessToken,
+        accessToken: readToken(fbToken.accessToken),
         post,
         serverUrl,
       });

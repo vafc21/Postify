@@ -4,7 +4,7 @@ const axios = require('axios');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
 const { getLongLivedToken, getPagesAndIgAccounts } = require('../services/meta');
-const { decrypt } = require('../utils/encryption');
+const { encrypt, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -61,6 +61,11 @@ router.get('/callback', async (req, res) => {
   }
 
   try {
+    // Re-verify the client really belongs to the user from the state JWT
+    const clientCheck = await prisma.client.findFirst({ where: { id: clientId, userId } });
+    if (!clientCheck) {
+      return res.redirect(`${CLIENT_URL}/oauth-result?error=invalid_state`);
+    }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user?.metaAppId || !user?.metaAppSecret) {
@@ -113,10 +118,11 @@ router.get('/callback', async (req, res) => {
     const page = pages[0];
     const igAccountId = page.instagram_business_account?.id || null;
 
+    const rawToken = platform === 'facebook' ? page.access_token : longToken;
     const tokenRecord = {
       clientId,
       platform,
-      accessToken: platform === 'facebook' ? page.access_token : longToken,
+      accessToken: encrypt(rawToken),
       expiresAt,
       pageId: page.id,
       instagramAccountId: igAccountId,

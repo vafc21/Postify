@@ -4,6 +4,7 @@ const { publishPost } = require('./meta');
 const { generateSlots } = require('./slotGenerator');
 
 const POLL_INTERVAL_MS = 60 * 1000;
+const MAX_PUBLISH_ATTEMPTS = 3;
 
 function isWithinPostingWindow(timezone) {
   const tz = timezone || process.env.POSTING_TIMEZONE || 'America/New_York';
@@ -14,12 +15,14 @@ function isWithinPostingWindow(timezone) {
   return hour >= 8 && hour < 20;
 }
 
-async function sendCompletionWebhook(webhookUrl, post, client) {
+async function sendWebhook(webhookUrl, event, post, client, extra = {}) {
   if (!webhookUrl) return;
   try {
     await axios.post(webhookUrl, {
-      event: 'post_published',
-      message: `Done - ${client.name}`,
+      event,
+      message: event === 'post_published'
+        ? `Done - ${client.name}`
+        : `Failed - ${client.name}`,
       clientName: client.name,
       businessName: client.businessName,
       postId: post.id,
@@ -29,6 +32,7 @@ async function sendCompletionWebhook(webhookUrl, post, client) {
         post.facebookResult && !post.facebookResult.error ? 'Facebook' : null,
       ].filter(Boolean),
       timestamp: new Date().toISOString(),
+      ...extra,
     }, { timeout: 5000 });
   } catch (err) {
     console.warn(`Worker: webhook notification failed: ${err.message}`);
@@ -72,17 +76,27 @@ async function processPost(post) {
       },
     });
 
-    // Notify that this post is done
-    await sendCompletionWebhook(user.notificationWebhookUrl, updated, post.client);
+    await sendWebhook(user.notificationWebhookUrl, 'post_published', updated, post.client);
   } catch (err) {
     console.error(`Worker: failed to post ${post.id}:`, err.message);
-    await prisma.scheduledPost.update({
+    const nextAttempts = (post.attempts || 0) + 1;
+    const giveUp = nextAttempts >= MAX_PUBLISH_ATTEMPTS;
+    const failed = await prisma.scheduledPost.update({
       where: { id: post.id },
       data: {
-        status: 'failed',
-        instagramResult: { error: err.message },
+        status: giveUp ? 'failed' : 'uploaded',
+        attempts: nextAttempts,
+        instagramResult: { error: err.message, attempt: nextAttempts },
       },
-    }).catch(() => {});
+    }).catch(() => null);
+
+    if (giveUp && failed) {
+      const user = await prisma.user.findUnique({
+        where: { id: post.client.userId },
+        select: { notificationWebhookUrl: true },
+      });
+      await sendWebhook(user?.notificationWebhookUrl, 'post_failed', failed, post.client, { error: err.message });
+    }
   }
 }
 
@@ -105,8 +119,11 @@ async function publishDuePosts() {
 }
 
 async function topUpSlots() {
+  // Pull the user's timezone alongside each campaign so generated slot times
+  // match what the admin saw when creating the campaign, not server-local UTC.
   const campaigns = await prisma.campaign.findMany({
     where: { isActive: true },
+    include: { client: { include: { user: { select: { timezone: true } } } } },
   });
 
   for (const campaign of campaigns) {
@@ -119,7 +136,8 @@ async function topUpSlots() {
     });
 
     if (futureCount < 14) {
-      const slots = generateSlots(campaign, new Date(), 30);
+      const tz = campaign.client?.user?.timezone;
+      const slots = generateSlots(campaign, new Date(), 30, { timezone: tz });
       if (slots.length > 0) {
         const existingTimes = await prisma.scheduledPost.findMany({
           where: { campaignId: campaign.id, scheduledFor: { gte: new Date() } },
@@ -136,16 +154,18 @@ async function topUpSlots() {
 }
 
 async function recoverStuckPosts() {
+  // Anything left in "posting" after a restart didn't actually publish — return
+  // it to "uploaded" so the next tick retries instead of marking it dead.
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
   const stuck = await prisma.scheduledPost.updateMany({
     where: {
       status: 'posting',
       updatedAt: { lt: fiveMinutesAgo },
     },
-    data: { status: 'failed', instagramResult: { error: 'Server restarted during publish' } },
+    data: { status: 'uploaded' },
   });
   if (stuck.count > 0) {
-    console.log(`Worker: recovered ${stuck.count} stuck post(s) from previous session`);
+    console.log(`Worker: recovered ${stuck.count} stuck post(s) from previous session — requeued`);
   }
 }
 

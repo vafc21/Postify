@@ -70,4 +70,19 @@ function maskKey(key) {
   return `${prefix}••••••••${suffix}`;
 }
 
-module.exports = { encrypt, decrypt, maskKey };
+/**
+ * Read a stored token, falling back to the raw string if it's a legacy
+ * plaintext value from before we encrypted access tokens. Lets us migrate
+ * without breaking existing connections.
+ */
+function readToken(stored) {
+  if (!stored) return null;
+  // Encrypted tokens are base64 of iv(16) + tag(16) + ciphertext — min 32 bytes
+  // before encoding, so the b64 string is > 43 chars and matches base64 alphabet.
+  const looksEncrypted = /^[A-Za-z0-9+/=]+$/.test(stored) && stored.length >= 44;
+  if (!looksEncrypted) return stored;
+  const decrypted = decrypt(stored);
+  return decrypted || stored;
+}
+
+module.exports = { encrypt, decrypt, readToken, maskKey };

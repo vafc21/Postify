@@ -61,11 +61,12 @@ describe('processPost', () => {
     );
   });
 
-  test('marks post as failed on Meta API error', async () => {
+  test('requeues post on transient error (under max attempts)', async () => {
     const post = {
       id: 'post-1',
       clientId: 'client-1',
       status: 'uploaded',
+      attempts: 0,
       client: { userId: 'user-1' },
     };
 
@@ -77,8 +78,31 @@ describe('processPost', () => {
 
     await processPost(post);
 
+    // First failure: requeued as 'uploaded' with incremented attempts
     expect(prisma.scheduledPost.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'failed' }) })
+      expect.objectContaining({ data: expect.objectContaining({ status: 'uploaded', attempts: 1 }) })
+    );
+  });
+
+  test('marks post as failed after exhausting max attempts', async () => {
+    const post = {
+      id: 'post-1',
+      clientId: 'client-1',
+      status: 'uploaded',
+      attempts: 2,
+      client: { userId: 'user-1' },
+    };
+
+    prisma.clientToken.findMany.mockResolvedValue([]);
+    prisma.user.findUnique.mockResolvedValue({ metaAppId: 'app-id', metaAppSecret: 'secret', timezone: 'UTC', notificationWebhookUrl: null });
+    prisma.scheduledPost.updateMany.mockResolvedValue({ count: 1 });
+    prisma.scheduledPost.update.mockResolvedValue({ id: 'post-1', client: { userId: 'user-1' } });
+    publishPost.mockRejectedValue(new Error('Meta API error'));
+
+    await processPost(post);
+
+    expect(prisma.scheduledPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'failed', attempts: 3 }) })
     );
   });
 

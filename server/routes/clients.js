@@ -15,7 +15,9 @@ function runUpload(middleware) {
       if (err instanceof MulterError) {
         return res.status(400).json({ error: err.message });
       }
-      if (err) return next(err);
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
       next();
     });
   };
@@ -25,11 +27,30 @@ function runUpload(middleware) {
 const logoDir = path.join(__dirname, '../uploads/logos');
 fs.mkdirSync(logoDir, { recursive: true });
 
+const LOGO_EXTENSIONS = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+};
+
 const logoStorage = multer.diskStorage({
   destination: logoDir,
-  filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  filename: (req, file, cb) => {
+    const ext = LOGO_EXTENSIONS[file.mimetype];
+    cb(null, `${uuidv4()}${ext}`);
+  },
 });
-const uploadLogo = multer({ storage: logoStorage, limits: { fileSize: 2 * 1024 * 1024 } });
+const uploadLogo = multer({
+  storage: logoStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (LOGO_EXTENSIONS[file.mimetype]) return cb(null, true);
+    cb(new Error(`Unsupported file type: ${file.mimetype}. Use JPG, PNG, GIF, WebP, or SVG.`));
+  },
+});
 
 // GET /api/clients
 router.get('/', auth, async (req, res) => {
@@ -135,7 +156,7 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-const { generateSlots } = require('../services/slotGenerator');
+const { generateSlots, endOfDayInTz } = require('../services/slotGenerator');
 const { getTemplate } = require('../services/templates');
 
 // POST /api/clients/:id/campaigns
@@ -157,11 +178,12 @@ router.post('/:id/campaigns', auth, async (req, res) => {
     if (!frequency) return res.status(400).json({ error: 'Frequency is required' });
     if (!scheduleConfig) return res.status(400).json({ error: 'Schedule config is required' });
 
-    // Default: one month from now if no end date provided
-    const resolvedEndDate = endDate
-      ? new Date(endDate)
-      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    if (isNaN(resolvedEndDate.getTime())) {
+    // Resolve to end-of-day in the user's timezone so the chosen date is
+    // fully included (e.g. picking June 15 in ET runs through 23:59 ET, not
+    // 19:59 ET as UTC midnight would imply).
+    const oneMonthOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const resolvedEndDate = endOfDayInTz(endDate || oneMonthOut, user?.timezone);
+    if (!resolvedEndDate || isNaN(resolvedEndDate.getTime())) {
       return res.status(400).json({ error: 'Invalid end date' });
     }
 

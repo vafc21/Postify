@@ -7,8 +7,19 @@ const { v4: uuidv4 } = require('uuid');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
 const { deleteIgPost, deleteFbPost } = require('../services/meta');
+const { readToken } = require('../utils/encryption');
 
 const router = express.Router();
+
+const MEDIA_EXTENSIONS = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+};
 
 const mediaStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -17,9 +28,31 @@ const mediaStorage = multer.diskStorage({
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
-  filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  // Force the extension from the validated MIME type so users can't drop
+  // arbitrary file types (e.g. .html) into /uploads.
+  filename: (req, file, cb) => {
+    const ext = MEDIA_EXTENSIONS[file.mimetype];
+    cb(null, `${uuidv4()}${ext}`);
+  },
 });
-const uploadMedia = multer({ storage: mediaStorage, limits: { fileSize: 100 * 1024 * 1024 } });
+const uploadMedia = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (MEDIA_EXTENSIONS[file.mimetype]) return cb(null, true);
+    cb(new Error(`Unsupported file type: ${file.mimetype}. Use JPG, PNG, GIF, WebP, MP4, or MOV.`));
+  },
+});
+
+function unlinkMediaFiles(mediaUrls = []) {
+  for (const url of mediaUrls) {
+    if (!url || !url.startsWith('/uploads/')) continue;
+    const abs = path.join(__dirname, '..', url);
+    fs.unlink(abs, (err) => {
+      if (err && err.code !== 'ENOENT') console.warn(`Failed to delete media ${abs}:`, err.message);
+    });
+  }
+}
 
 function runUpload(middleware) {
   return (req, res, next) => {
@@ -27,7 +60,10 @@ function runUpload(middleware) {
       if (err instanceof MulterError) {
         return res.status(400).json({ error: err.message });
       }
-      if (err) return next(err);
+      if (err) {
+        // fileFilter rejections come through as regular Errors — surface them to the client
+        return res.status(400).json({ error: err.message });
+      }
       next();
     });
   };
@@ -101,9 +137,12 @@ router.post('/:id/media', auth, runUpload(uploadMedia.array('media', 10)), async
     const subdir = isVideo ? 'videos' : 'photos';
     const mediaUrls = req.files.map(f => `/uploads/${subdir}/${f.filename}`);
 
+    // Delete the old media files (if any) before replacing
+    unlinkMediaFiles(post.mediaUrls || []);
+
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
-      data: { mediaType, mediaUrls, status: 'uploaded' },
+      data: { mediaType, mediaUrls, status: 'uploaded', attempts: 0 },
     });
     res.json(updated);
   } catch (err) {
@@ -144,9 +183,11 @@ router.delete('/:id/media', auth, async (req, res) => {
       return res.status(400).json({ error: 'Cannot remove media from a posting or posted slot' });
     }
 
+    unlinkMediaFiles(post.mediaUrls || []);
+
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
-      data: { mediaType: null, mediaUrls: [], status: 'pending' },
+      data: { mediaType: null, mediaUrls: [], status: 'pending', attempts: 0 },
     });
     res.json(updated);
   } catch (err) {
@@ -173,7 +214,7 @@ router.post('/:id/unpost', auth, async (req, res) => {
     const igToken = tokens.find(t => t.platform === 'instagram');
     if (igToken && post.instagramResult?.feed?.mediaId) {
       try {
-        await deleteIgPost(post.instagramResult.feed.mediaId, igToken.accessToken);
+        await deleteIgPost(post.instagramResult.feed.mediaId, readToken(igToken.accessToken));
       } catch (err) {
         errors.push(`Instagram: ${err.response?.data?.error?.message || err.message}`);
       }
@@ -182,7 +223,7 @@ router.post('/:id/unpost', auth, async (req, res) => {
     const fbToken = tokens.find(t => t.platform === 'facebook');
     if (fbToken && post.facebookResult?.feed?.postId) {
       try {
-        await deleteFbPost(post.facebookResult.feed.postId, fbToken.accessToken);
+        await deleteFbPost(post.facebookResult.feed.postId, readToken(fbToken.accessToken));
       } catch (err) {
         errors.push(`Facebook: ${err.response?.data?.error?.message || err.message}`);
       }
