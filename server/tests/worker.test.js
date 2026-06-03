@@ -106,14 +106,43 @@ describe('processPost', () => {
     );
   });
 
-  test('releases claim and skips publish outside 8am-8pm window', async () => {
-    // 2 AM UTC — outside the posting window for all common timezones
+  test('publishes at exact scheduled time when no quiet-hours window is set', async () => {
+    // 2 AM UTC — would be outside a typical window, but none is configured
     jest.setSystemTime(new Date('2024-06-15T02:00:00Z'));
 
     const post = {
       id: 'post-1',
       clientId: 'client-1',
       status: 'uploaded',
+      attempts: 0,
+      client: { userId: 'user-1' },
+    };
+
+    prisma.clientToken.findMany.mockResolvedValue([]);
+    prisma.user.findUnique.mockResolvedValue({ metaAppId: 'app-id', metaAppSecret: 'secret', timezone: 'UTC', notificationWebhookUrl: null });
+    prisma.scheduledPost.updateMany.mockResolvedValue({ count: 1 });
+    prisma.scheduledPost.update.mockResolvedValue({});
+    publishPost.mockResolvedValue({ instagramResult: null, facebookResult: null });
+
+    await processPost(post);
+
+    expect(publishPost).toHaveBeenCalled();
+    expect(prisma.scheduledPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'posted' }) })
+    );
+  });
+
+  test('releases claim and skips publish outside a configured quiet-hours window', async () => {
+    process.env.POSTING_WINDOW_START = '8';
+    process.env.POSTING_WINDOW_END = '20';
+    // 2 AM UTC — outside the configured 8-20 window
+    jest.setSystemTime(new Date('2024-06-15T02:00:00Z'));
+
+    const post = {
+      id: 'post-1',
+      clientId: 'client-1',
+      status: 'uploaded',
+      attempts: 0,
       client: { userId: 'user-1' },
     };
 
@@ -124,11 +153,12 @@ describe('processPost', () => {
 
     await processPost(post);
 
-    // Claim is released back to 'uploaded', never marked posted/failed
     expect(prisma.scheduledPost.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ status: 'posting' }), data: expect.objectContaining({ status: 'uploaded' }) })
     );
     expect(publishPost).not.toHaveBeenCalled();
-    expect(prisma.scheduledPost.update).not.toHaveBeenCalled();
+
+    delete process.env.POSTING_WINDOW_START;
+    delete process.env.POSTING_WINDOW_END;
   });
 });

@@ -100,7 +100,7 @@ export default function Settings() {
 
         <Section title="Posting Schedule">
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10, lineHeight: 1.6 }}>
-            Posts only publish between <strong style={{ color: 'var(--text)' }}>8 AM – 8 PM</strong> in your timezone. Any post due outside this window is held until the window reopens.
+            Posts publish at their exact scheduled time in your timezone. The times you pick when building a campaign are interpreted in the timezone selected below.
           </div>
           <div>
             <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, fontWeight: 700, letterSpacing: 1, marginBottom: 4, textTransform: 'uppercase' }}>Timezone</label>

@@ -6,13 +6,19 @@ const { generateSlots } = require('./slotGenerator');
 const POLL_INTERVAL_MS = 60 * 1000;
 const MAX_PUBLISH_ATTEMPTS = 3;
 
+// Posts publish at their exact scheduled time by default. Quiet hours are
+// opt-in: set POSTING_WINDOW_START and POSTING_WINDOW_END (24h, e.g. 8 and 20)
+// to only allow publishing within that window in the user's timezone.
 function isWithinPostingWindow(timezone) {
+  const start = process.env.POSTING_WINDOW_START;
+  const end = process.env.POSTING_WINDOW_END;
+  if (start === undefined || end === undefined) return true;
   const tz = timezone || process.env.POSTING_TIMEZONE || 'America/New_York';
   const hour = parseInt(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(new Date()),
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', hour: 'numeric' }).format(new Date()),
     10
   );
-  return hour >= 8 && hour < 20;
+  return hour >= Number(start) && hour < Number(end);
 }
 
 async function sendWebhook(webhookUrl, event, post, client, extra = {}) {
