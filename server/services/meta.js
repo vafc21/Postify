@@ -109,7 +109,17 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     creation_id: creationId,
     access_token: accessToken,
   });
-  return { mediaId: data.id, creationId };
+
+  // Capture the public permalink so the dashboard can link to the live post
+  let permalink = null;
+  try {
+    const { data: info } = await axios.get(`${GRAPH}/${data.id}`, {
+      params: { fields: 'permalink', access_token: accessToken },
+    });
+    permalink = info.permalink || null;
+  } catch (_) { /* permalink is best-effort */ }
+
+  return { mediaId: data.id, creationId, permalink };
 }
 
 async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink }) {
@@ -150,7 +160,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
     if (locationId) params.place = locationId;
 
     const { data } = await axios.post(`${GRAPH}/${pageId}/videos`, params);
-    feedResult = { videoId: data.id };
+    feedResult = { videoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
 
     // Auto-like our own post after it publishes
     if (data.id) {
@@ -182,7 +192,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
       if (locationId) params.place = locationId;
 
       const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, params);
-      feedResult = { postId: data.id };
+      feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
 
       if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
 
@@ -199,7 +209,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
       if (locationId) params.place = locationId;
 
       const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, params);
-      feedResult = { photoId: data.id };
+      feedResult = { photoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
 
       if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
 

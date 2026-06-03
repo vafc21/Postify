@@ -1,6 +1,15 @@
 import { useState, useRef } from 'react';
-import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link } from 'lucide-react';
+import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link, ExternalLink } from 'lucide-react';
 import api from '../api';
+
+function postLinks(post) {
+  const links = [];
+  const ig = post.instagramResult?.feed?.permalink;
+  const fb = post.facebookResult?.feed?.permalink;
+  if (ig) links.push({ label: 'Instagram', url: ig });
+  if (fb) links.push({ label: 'Facebook', url: fb });
+  return links;
+}
 
 export default function MediaSlot({ post, onChange }) {
   const [loading, setLoading] = useState(false);
@@ -128,6 +137,12 @@ export default function MediaSlot({ post, onChange }) {
             )}
             {post.status === 'posted' && (
               <>
+                {postLinks(post).map(l => (
+                  <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" title={`View on ${l.label}`}
+                    style={{ ...actionBtnBase, color: 'var(--success)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <ExternalLink size={11} /> {l.label}
+                  </a>
+                ))}
                 <ActionBtn icon={<Play size={11} />} onClick={() => setPreviewUrl(`${SERVER}${post.mediaUrls[0]}`)} title="Preview" />
                 <ActionBtn icon={<RotateCcw size={11} />} onClick={unpost} title="Unpost" danger />
               </>
