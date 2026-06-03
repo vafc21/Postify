@@ -118,17 +118,43 @@ describe('processPost', () => {
       client: { userId: 'user-1' },
     };
 
-    prisma.clientToken.findMany.mockResolvedValue([]);
+    prisma.clientToken.findMany.mockResolvedValue([
+      { platform: 'instagram', accessToken: 'tok', instagramAccountId: 'ig-123', pageId: null },
+    ]);
     prisma.user.findUnique.mockResolvedValue({ metaAppId: 'app-id', metaAppSecret: 'secret', timezone: 'UTC', notificationWebhookUrl: null });
     prisma.scheduledPost.updateMany.mockResolvedValue({ count: 1 });
     prisma.scheduledPost.update.mockResolvedValue({});
-    publishPost.mockResolvedValue({ instagramResult: null, facebookResult: null });
+    publishPost.mockResolvedValue({ instagramResult: { feed: { mediaId: 'ig-post-1' } }, facebookResult: null });
 
     await processPost(post);
 
     expect(publishPost).toHaveBeenCalled();
     expect(prisma.scheduledPost.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'posted' }) })
+    );
+  });
+
+  test('marks post failed when client has no connected accounts', async () => {
+    jest.setSystemTime(new Date('2024-06-15T14:00:00Z'));
+    const post = {
+      id: 'post-1',
+      clientId: 'client-1',
+      status: 'uploaded',
+      attempts: 0,
+      client: { userId: 'user-1' },
+    };
+
+    prisma.clientToken.findMany.mockResolvedValue([]);
+    prisma.user.findUnique.mockResolvedValue({ metaAppId: 'app-id', metaAppSecret: 'secret', timezone: 'UTC', notificationWebhookUrl: null });
+    prisma.scheduledPost.updateMany.mockResolvedValue({ count: 1 });
+    prisma.scheduledPost.update.mockResolvedValue({ id: 'post-1', client: { userId: 'user-1' } });
+    publishPost.mockResolvedValue({ instagramResult: null, facebookResult: null });
+
+    await processPost(post);
+
+    // Nothing to post to → failed immediately, no endless retry
+    expect(prisma.scheduledPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'failed' }) })
     );
   });
 

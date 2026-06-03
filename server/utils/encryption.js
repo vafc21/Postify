@@ -34,25 +34,32 @@ function encrypt(plaintext) {
 }
 
 /**
- * Decrypt a base64-encoded AES-256-GCM ciphertext
+ * Decrypt a base64-encoded AES-256-GCM ciphertext. Throws on failure.
+ */
+function decryptRaw(encryptedBase64) {
+  const key = getEncryptionKey();
+  const buffer = Buffer.from(encryptedBase64, 'base64');
+
+  const iv = buffer.subarray(0, IV_LENGTH);
+  const tag = buffer.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+  const ciphertext = buffer.subarray(IV_LENGTH + TAG_LENGTH);
+
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(tag);
+
+  let decrypted = decipher.update(ciphertext, undefined, 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
+
+/**
+ * Decrypt a base64-encoded AES-256-GCM ciphertext. Returns null on failure.
  */
 function decrypt(encryptedBase64) {
   if (!encryptedBase64) return null;
   try {
-    const key = getEncryptionKey();
-    const buffer = Buffer.from(encryptedBase64, 'base64');
-
-    const iv = buffer.subarray(0, IV_LENGTH);
-    const tag = buffer.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-    const ciphertext = buffer.subarray(IV_LENGTH + TAG_LENGTH);
-
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
-
-    let decrypted = decipher.update(ciphertext, undefined, 'utf8');
-    decrypted += decipher.final('utf8');
-
-    return decrypted;
+    return decryptRaw(encryptedBase64);
   } catch (err) {
     console.error('Decryption failed:', err.message);
     return null;
@@ -81,8 +88,13 @@ function readToken(stored) {
   // before encoding, so the b64 string is > 43 chars and matches base64 alphabet.
   const looksEncrypted = /^[A-Za-z0-9+/=]+$/.test(stored) && stored.length >= 44;
   if (!looksEncrypted) return stored;
-  const decrypted = decrypt(stored);
-  return decrypted || stored;
+  // Quietly attempt decryption — legacy plaintext tokens (or Meta tokens that
+  // happen to look base64-ish) just fall through to the raw value.
+  try {
+    return decryptRaw(stored);
+  } catch (_) {
+    return stored;
+  }
 }
 
 module.exports = { encrypt, decrypt, readToken, maskKey };

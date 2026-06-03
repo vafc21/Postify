@@ -73,6 +73,34 @@ async function processPost(post) {
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
     const { instagramResult, facebookResult } = await publishPost(post, tokens, user, serverUrl);
 
+    // A platform "succeeded" only if it was attempted and its feed post went through.
+    const igOk = !!(instagramResult && !instagramResult.error && instagramResult.feed && !instagramResult.feed.error);
+    const fbOk = !!(facebookResult && !facebookResult.error && facebookResult.feed && !facebookResult.feed.error);
+    const attempted = (instagramResult ? 1 : 0) + (facebookResult ? 1 : 0);
+
+    if (attempted === 0 || (!igOk && !fbOk)) {
+      const reason = attempted === 0
+        ? 'No connected Instagram or Facebook account for this client'
+        : 'Publishing failed on all platforms';
+      const nextAttempts = (post.attempts || 0) + 1;
+      // No point retrying a client with no connected accounts
+      const giveUp = nextAttempts >= MAX_PUBLISH_ATTEMPTS || attempted === 0;
+      const failed = await prisma.scheduledPost.update({
+        where: { id: post.id },
+        data: {
+          status: giveUp ? 'failed' : 'uploaded',
+          attempts: nextAttempts,
+          instagramResult: instagramResult || undefined,
+          facebookResult: facebookResult || undefined,
+        },
+      });
+      console.error(`Worker: post ${post.id} ${giveUp ? 'failed' : 'will retry'} — ${reason}`);
+      if (giveUp) {
+        await sendWebhook(user.notificationWebhookUrl, 'post_failed', failed, post.client, { error: reason });
+      }
+      return;
+    }
+
     const updated = await prisma.scheduledPost.update({
       where: { id: post.id },
       data: {
