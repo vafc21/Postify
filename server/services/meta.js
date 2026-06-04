@@ -124,11 +124,13 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
 
 async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink }) {
   const isVideo = mediaType === 'video';
+  // Stories require media_type=STORIES. The old `is_story` flag was not a real
+  // Graph API param, so the container fell back to a normal (caption-less) feed
+  // post — which is what caused the duplicate Instagram post.
   const params = isVideo
-    ? { media_type: 'VIDEO', video_url: `${serverUrl}${mediaUrls[0]}` }
-    : { media_type: 'IMAGE', image_url: `${serverUrl}${mediaUrls[0]}` };
+    ? { media_type: 'STORIES', video_url: `${serverUrl}${mediaUrls[0]}` }
+    : { media_type: 'STORIES', image_url: `${serverUrl}${mediaUrls[0]}` };
 
-  params.is_story = true;
   params.access_token = accessToken;
 
   if (storyLink) {
@@ -239,11 +241,11 @@ async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serve
         published: false,
         access_token: accessToken,
       });
-      const { data } = await axios.post(`${GRAPH}/${pageId}/stories`, {
+      const { data } = await axios.post(`${GRAPH}/${pageId}/photo_stories`, {
         photo_id: photo.id,
         access_token: accessToken,
       });
-      return { storyId: data.id };
+      return { storyId: data.post_id || data.id };
     }
   } catch (err) {
     return { error: err.response?.data || err.message };
