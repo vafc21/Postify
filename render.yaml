@@ -18,7 +18,7 @@ services:
       - key: SERVER_URL
         sync: false   # Set to your Render backend URL, e.g. https://postify-server.onrender.com
       - key: CLIENT_URL
-        sync: false   # Set to your Render frontend URL, e.g. https://postify-client.onrender.com
+        sync: false   # Frontend origin(s) for CORS, no trailing slash. Comma-separate to allow several, e.g. https://rjmarketing.vlad-p.com,https://postify-client.onrender.com
       - key: ADMIN_EMAIL
         sync: false   # Login email for the admin account
       - key: ADMIN_PASSWORD
