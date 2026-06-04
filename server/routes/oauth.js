@@ -9,7 +9,10 @@ const { encrypt, decrypt } = require('../utils/encryption');
 const router = express.Router();
 
 const GRAPH_AUTH = 'https://www.facebook.com/v18.0/dialog/oauth';
-const SCOPES = 'pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish';
+// pages_show_list + business_management let us discover Pages that are owned by
+// a Business Portfolio (Meta Business Suite), which otherwise don't appear via
+// /me/accounts when the user manages them through a business rather than directly.
+const SCOPES = 'pages_show_list,pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish,business_management';
 
 // GET /api/oauth/clients/:clientId/connect/:platform
 router.get('/clients/:clientId/connect/:platform', auth, async (req, res) => {
