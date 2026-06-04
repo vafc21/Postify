@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import api from '../api';
+import api, { setToken } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -16,12 +16,14 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
+    if (data.token) setToken(data.token);
     setUser(data.user);
     return data;
   };
 
   const register = async (email, password) => {
     const { data } = await api.post('/auth/register', { email, password });
+    if (data.token) setToken(data.token);
     setUser(data.user);
     return data;
   };
@@ -32,6 +34,7 @@ export function AuthProvider({ children }) {
     } catch (_) {
       // ignore — server session may already be cleared
     } finally {
+      setToken(null);
       setUser(null);
     }
   };

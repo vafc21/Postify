@@ -44,8 +44,12 @@ router.post('/login', async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    // Also return the token so the client can store it and send it via the
+    // Authorization header — required when the frontend and backend are on
+    // different domains and the cookie would be blocked as third-party.
     res.json({
       message: 'Login successful',
+      token,
       user: { id: user.id, email: user.email },
     });
   } catch (err) {
