@@ -24,8 +24,23 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+// Allow one or more comma-separated origins via CLIENT_URL. Trailing slashes are
+// tolerated so e.g. "https://app.example.com/" matches the browser's slash-less Origin.
+const normalizeOrigin = (o) => o.trim().replace(/\/+$/, '');
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin(origin, callback) {
+    // Allow requests with no Origin header (curl, health checks, same-origin server calls).
+    if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) {
+      return callback(null, true);
+    }
+    console.warn(`CORS: blocked origin ${origin} (allowed: ${allowedOrigins.join(', ')})`);
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
