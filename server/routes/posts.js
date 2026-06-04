@@ -6,8 +6,8 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
-const { deleteIgPost, deleteFbPost } = require('../services/meta');
-const { readToken } = require('../utils/encryption');
+const { deleteIgPost, deleteFbPost, searchPlaces } = require('../services/meta');
+const { readToken, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -74,6 +74,40 @@ async function findPost(postId, userId) {
     where: { id: postId, client: { userId } },
   });
 }
+
+// GET /api/posts/places/search?clientId=&q=
+// Typeahead place search for location tagging. Uses the client's connected Meta
+// token so results are scoped to a real account.
+router.get('/places/search', auth, async (req, res) => {
+  try {
+    const { clientId, q } = req.query;
+    if (!q || q.trim().length < 2) return res.json([]);
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+
+    const client = await prisma.client.findFirst({
+      where: { id: clientId, userId: req.userId },
+      include: { tokens: true },
+    });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    // Prefer the Instagram token (a long-lived user token); fall back to Facebook.
+    const tokenRecord = client.tokens.find(t => t.platform === 'instagram')
+      || client.tokens.find(t => t.platform === 'facebook');
+    if (!tokenRecord) {
+      return res.status(400).json({ error: 'Connect Instagram or Facebook for this client first' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    const appSecret = decrypt(user?.metaAppSecret);
+    if (!appSecret) return res.status(400).json({ error: 'Set your Meta App Secret in Settings first' });
+
+    const places = await searchPlaces(q.trim(), readToken(tokenRecord.accessToken), appSecret);
+    res.json(places);
+  } catch (err) {
+    console.error('Place search failed:', err.response?.data || err.message);
+    res.status(502).json({ error: 'Place search failed' });
+  }
+});
 
 // GET /api/posts?clientId=&status=&upcoming=&limit=
 router.get('/', auth, async (req, res) => {

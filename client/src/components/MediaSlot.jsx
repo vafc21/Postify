@@ -20,6 +20,11 @@ export default function MediaSlot({ post, onChange }) {
   const [thumbOffset, setThumbOffset] = useState(post.thumbOffset != null ? String(post.thumbOffset) : '');
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showExtra, setShowExtra] = useState(false);
+  const [placeResults, setPlaceResults] = useState([]);
+  const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const [showPlaceList, setShowPlaceList] = useState(false);
+  const placeTimer = useRef();
+  const justSelectedPlace = useRef(false);
   const fileRef = useRef();
   const SERVER = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
 
@@ -65,6 +70,51 @@ export default function MediaSlot({ post, onChange }) {
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to save');
     }
+  };
+
+  // Debounced location typeahead. Typing invalidates any previously linked
+  // place ID — only picking a result re-links it.
+  const onLocationChange = (value) => {
+    setLocation(value);
+    if (locationId) setLocationId('');
+    clearTimeout(placeTimer.current);
+    if (value.trim().length < 2) {
+      setPlaceResults([]);
+      setShowPlaceList(false);
+      return;
+    }
+    placeTimer.current = setTimeout(async () => {
+      setSearchingPlaces(true);
+      setShowPlaceList(true);
+      try {
+        const { data } = await api.get('/posts/places/search', {
+          params: { clientId: post.clientId, q: value.trim() },
+        });
+        setPlaceResults(data);
+      } catch (err) {
+        setPlaceResults([]);
+      } finally {
+        setSearchingPlaces(false);
+      }
+    }, 350);
+  };
+
+  const selectPlace = (place) => {
+    justSelectedPlace.current = true;
+    setLocation(place.name);
+    setLocationId(place.id);
+    setPlaceResults([]);
+    setShowPlaceList(false);
+    saveField({ location: place.name, locationId: place.id });
+  };
+
+  const onLocationBlur = () => {
+    setTimeout(() => setShowPlaceList(false), 150);
+    if (justSelectedPlace.current) {
+      justSelectedPlace.current = false;
+      return;
+    }
+    saveField({ location, locationId });
   };
 
   const toggleStory = async () => {
@@ -186,23 +236,42 @@ export default function MediaSlot({ post, onChange }) {
 
         {showExtra && !isLocked && (
           <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {/* Location */}
+            {/* Location typeahead — searches real Meta places and links the ID */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <MapPin size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-              <input
-                style={miniInputStyle}
-                placeholder="Location name (e.g. Miami Beach)"
-                value={location}
-                onChange={e => setLocation(e.target.value)}
-                onBlur={() => saveField({ location })}
-              />
-              <input
-                style={{ ...miniInputStyle, width: 120 }}
-                placeholder="FB Place ID (optional)"
-                value={locationId}
-                onChange={e => setLocationId(e.target.value)}
-                onBlur={() => saveField({ locationId })}
-              />
+              <MapPin size={11} color={locationId ? 'var(--success)' : 'var(--text-muted)'} style={{ flexShrink: 0 }} />
+              <div style={{ position: 'relative', flex: 1 }}>
+                <input
+                  style={miniInputStyle}
+                  placeholder="Search a location…"
+                  value={location}
+                  onChange={e => onLocationChange(e.target.value)}
+                  onFocus={() => placeResults.length > 0 && setShowPlaceList(true)}
+                  onBlur={onLocationBlur}
+                />
+                {locationId && (
+                  <span title="Place linked — will tag this location" style={linkedBadgeStyle}>✓ linked</span>
+                )}
+                {showPlaceList && (
+                  <div style={dropdownStyle}>
+                    {searchingPlaces && <div style={dropdownMsgStyle}>Searching…</div>}
+                    {!searchingPlaces && placeResults.length === 0 && (
+                      <div style={dropdownMsgStyle}>No matching places found</div>
+                    )}
+                    {placeResults.map(p => (
+                      <div
+                        key={p.id}
+                        style={dropdownItemStyle}
+                        onMouseDown={e => { e.preventDefault(); selectPlace(p); }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-3)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <div style={{ color: 'var(--text)', fontSize: 11 }}>{p.name}</div>
+                        {p.address && <div style={{ color: 'var(--text-muted)', fontSize: 9 }}>{p.address}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Story link / mention */}
@@ -293,6 +362,7 @@ const actionBtnBase = { display: 'flex', alignItems: 'center', justifyContent: '
 
 const miniInputStyle = {
   flex: 1,
+  width: '100%',
   padding: '4px 7px',
   borderRadius: 5,
   border: '1px solid var(--border)',
@@ -300,6 +370,45 @@ const miniInputStyle = {
   color: 'var(--text)',
   fontSize: 10,
   outline: 'none',
+};
+
+const dropdownStyle = {
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  right: 0,
+  marginTop: 2,
+  background: 'var(--bg-2)',
+  border: '1px solid var(--border)',
+  borderRadius: 6,
+  boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+  zIndex: 50,
+  maxHeight: 180,
+  overflowY: 'auto',
+};
+
+const dropdownItemStyle = {
+  padding: '5px 8px',
+  cursor: 'pointer',
+  borderBottom: '1px solid var(--border)',
+};
+
+const dropdownMsgStyle = {
+  padding: '6px 8px',
+  fontSize: 10,
+  color: 'var(--text-muted)',
+};
+
+const linkedBadgeStyle = {
+  position: 'absolute',
+  right: 6,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  fontSize: 8,
+  color: 'var(--success)',
+  pointerEvents: 'none',
+  background: 'var(--bg-2)',
+  paddingLeft: 4,
 };
 
 function isUrgent(post) {

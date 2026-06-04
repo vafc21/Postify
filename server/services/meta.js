@@ -1,7 +1,38 @@
 const axios = require('axios');
+const crypto = require('crypto');
 const { readToken } = require('../utils/encryption');
 
 const GRAPH = 'https://graph.facebook.com/v18.0';
+
+// Graph requires an appsecret_proof (HMAC of the token with the app secret) on
+// server-side calls when the app has "Require App Secret" enabled.
+function appSecretProof(accessToken, appSecret) {
+  return crypto.createHmac('sha256', appSecret).update(accessToken).digest('hex');
+}
+
+function formatPlaceAddress(loc = {}) {
+  return [loc.street, loc.city, loc.state, loc.country].filter(Boolean).join(', ');
+}
+
+// Typeahead search for taggable places. /pages/search is the only supported
+// place search since the dedicated Places Search API was deprecated (2020); it
+// returns Facebook Place Pages whose IDs work as both the Instagram location_id
+// and the Facebook `place` tag.
+async function searchPlaces(query, accessToken, appSecret) {
+  const { data } = await axios.get(`${GRAPH}/pages/search`, {
+    params: {
+      q: query,
+      fields: 'id,name,location,link',
+      access_token: accessToken,
+      appsecret_proof: appSecretProof(accessToken, appSecret),
+      limit: 10,
+    },
+  });
+  // Keep only results that resolve to a physical place (have a location).
+  return (data.data || [])
+    .filter(p => p.location && (p.location.city || p.location.country || p.location.street))
+    .map(p => ({ id: p.id, name: p.name, address: formatPlaceAddress(p.location) }));
+}
 
 async function publishPost(post, tokens, appCreds, serverUrl) {
   const results = { instagramResult: null, facebookResult: null };
@@ -299,6 +330,7 @@ module.exports = {
   publishPost,
   getLongLivedToken,
   getPagesAndIgAccounts,
+  searchPlaces,
   deleteIgPost,
   deleteFbPost,
 };
