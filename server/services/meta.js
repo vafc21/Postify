@@ -259,12 +259,31 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
 async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl }) {
   try {
     if (mediaType === 'video') {
-      const { data } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
-        file_url: `${serverUrl}${mediaUrls[0]}`,
-        upload_phase: 'finish',
+      // Facebook video stories require a 3-phase upload: start → upload the
+      // hosted file → finish. A single finish call with file_url does nothing.
+      const { data: start } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
+        upload_phase: 'start',
         access_token: accessToken,
       });
-      return { storyId: data.id };
+      const videoId = start.video_id;
+
+      // Phase 2: hand Meta the public URL to fetch (resumable upload endpoint).
+      await axios.post(start.upload_url, null, {
+        headers: {
+          Authorization: `OAuth ${accessToken}`,
+          file_url: `${serverUrl}${mediaUrls[0]}`,
+        },
+      });
+
+      // Wait for Meta to finish downloading/processing before publishing.
+      await waitForFbVideoStory(videoId, accessToken);
+
+      const { data } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
+        upload_phase: 'finish',
+        video_id: videoId,
+        access_token: accessToken,
+      });
+      return { storyId: data.post_id || videoId };
     } else {
       // For photos, upload unpublished then share to story
       const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
@@ -297,6 +316,24 @@ async function waitForContainer(containerId, accessToken, maxAttempts = 15) {
     await new Promise(r => setTimeout(r, 4000));
   }
   throw new Error('Media container timed out');
+}
+
+// Poll a Facebook video-story upload until Meta has fetched and processed the
+// file, so the finish phase doesn't publish an empty/half-uploaded story.
+async function waitForFbVideoStory(videoId, accessToken, maxAttempts = 20) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const { data } = await axios.get(`${GRAPH}/${videoId}`, {
+      params: { fields: 'status', access_token: accessToken },
+    });
+    const uploading = data.status?.uploading_phase?.status;
+    const processing = data.status?.processing_phase?.status;
+    if (uploading === 'error' || processing === 'error') {
+      throw new Error('Facebook video story processing failed');
+    }
+    if (uploading === 'complete' && (!processing || processing === 'complete')) return;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  throw new Error('Facebook video story timed out');
 }
 
 async function getLongLivedToken(shortToken, appId, appSecret) {
