@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link, ExternalLink } from 'lucide-react';
+import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link, ExternalLink, Pencil, Check, X } from 'lucide-react';
 import api from '../api';
 
 function postLinks(post) {
@@ -20,6 +20,9 @@ export default function MediaSlot({ post, onChange }) {
   const [thumbOffset, setThumbOffset] = useState(post.thumbOffset != null ? String(post.thumbOffset) : '');
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showExtra, setShowExtra] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [scheduleDraft, setScheduleDraft] = useState('');
+  const [savingSchedule, setSavingSchedule] = useState(false);
   const [placeResults, setPlaceResults] = useState([]);
   const [searchingPlaces, setSearchingPlaces] = useState(false);
   const [showPlaceList, setShowPlaceList] = useState(false);
@@ -117,6 +120,27 @@ export default function MediaSlot({ post, onChange }) {
     saveField({ location, locationId });
   };
 
+  const startEditSchedule = () => {
+    setScheduleDraft(toLocalInputValue(post.scheduledFor));
+    setEditingSchedule(true);
+  };
+
+  const saveSchedule = async () => {
+    if (!scheduleDraft) return;
+    const when = new Date(scheduleDraft);
+    if (isNaN(when.getTime())) return;
+    setSavingSchedule(true);
+    try {
+      const { data } = await api.put(`/posts/${post.id}`, { scheduledFor: when.toISOString() });
+      onChange(data);
+      setEditingSchedule(false);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to reschedule');
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
   const toggleStory = async () => {
     try {
       const { data } = await api.put(`/posts/${post.id}`, { postToStory: !post.postToStory });
@@ -168,7 +192,26 @@ export default function MediaSlot({ post, onChange }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
           <div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{scheduledLabel}</div>
+            {editingSchedule ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                <input
+                  type="datetime-local"
+                  value={scheduleDraft}
+                  onChange={e => setScheduleDraft(e.target.value)}
+                  style={scheduleInputStyle}
+                  autoFocus
+                />
+                <button onClick={saveSchedule} disabled={savingSchedule} title="Save" style={iconSaveBtn}><Check size={11} /></button>
+                <button onClick={() => setEditingSchedule(false)} title="Cancel" style={iconCancelBtn}><X size={11} /></button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{scheduledLabel}</span>
+                {!isLocked && (
+                  <button onClick={startEditSchedule} title="Reschedule" style={scheduleEditBtn}><Pencil size={10} /></button>
+                )}
+              </div>
+            )}
             <StatusBadge status={post.status} />
           </div>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
@@ -414,3 +457,62 @@ const linkedBadgeStyle = {
 function isUrgent(post) {
   return new Date(post.scheduledFor) - new Date() < 24 * 60 * 60 * 1000;
 }
+
+// Format a stored UTC timestamp into the "YYYY-MM-DDTHH:mm" string that
+// <input type="datetime-local"> expects, in the viewer's local time —
+// matching how scheduledLabel is displayed.
+function toLocalInputValue(iso) {
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const scheduleInputStyle = {
+  padding: '3px 6px',
+  borderRadius: 5,
+  border: '1px solid var(--border)',
+  background: 'var(--bg-2)',
+  color: 'var(--text)',
+  fontSize: 10,
+  outline: 'none',
+};
+
+const scheduleEditBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 18,
+  height: 18,
+  borderRadius: 4,
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  border: 'none',
+  cursor: 'pointer',
+  padding: 0,
+};
+
+const iconSaveBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  borderRadius: 4,
+  background: 'var(--primary)',
+  color: '#fff',
+  border: 'none',
+  cursor: 'pointer',
+};
+
+const iconCancelBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  borderRadius: 4,
+  background: 'var(--bg-3)',
+  color: 'var(--text-muted)',
+  border: 'none',
+  cursor: 'pointer',
+};

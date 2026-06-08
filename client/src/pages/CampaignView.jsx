@@ -69,7 +69,9 @@ export default function CampaignView() {
   };
 
   const updatePost = (updatedPost) => {
-    setPosts(prev => prev.map(p => p.id === updatedPost.id ? updatedPost : p));
+    setPosts(prev => prev
+      .map(p => p.id === updatedPost.id ? updatedPost : p)
+      .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor)));
   };
 
   const filteredPosts = posts.filter(p => {

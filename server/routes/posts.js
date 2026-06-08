@@ -191,7 +191,7 @@ router.put('/:id', auth, async (req, res) => {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    const { caption, postToStory, location, locationId, storyLink, thumbOffset } = req.body;
+    const { caption, postToStory, location, locationId, storyLink, thumbOffset, scheduledFor } = req.body;
     const data = {};
     if (caption !== undefined) data.caption = caption;
     if (postToStory !== undefined) data.postToStory = postToStory;
@@ -199,6 +199,14 @@ router.put('/:id', auth, async (req, res) => {
     if (locationId !== undefined) data.locationId = locationId;
     if (storyLink !== undefined) data.storyLink = storyLink;
     if (thumbOffset !== undefined) data.thumbOffset = thumbOffset === '' ? null : Number(thumbOffset);
+    if (scheduledFor !== undefined) {
+      if (['posting', 'posted'].includes(post.status)) {
+        return res.status(400).json({ error: 'Cannot reschedule a slot that is posting or already posted' });
+      }
+      const when = new Date(scheduledFor);
+      if (isNaN(when.getTime())) return res.status(400).json({ error: 'Invalid date/time' });
+      data.scheduledFor = when;
+    }
 
     const updated = await prisma.scheduledPost.update({ where: { id: req.params.id }, data });
     res.json(updated);
