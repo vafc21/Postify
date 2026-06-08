@@ -1,6 +1,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { readToken } = require('../utils/encryption');
+const { renderStoryToFile } = require('./storyRenderer');
 
 const GRAPH = 'https://graph.facebook.com/v18.0';
 
@@ -46,6 +47,35 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
   const igToken = tokens.find(t => t.platform === 'instagram');
   const fbToken = tokens.find(t => t.platform === 'facebook');
 
+  // Resolve the connected IG identity once — used both for the rendered story
+  // card and for the @mention user_tag.
+  let igProfile = null;
+  if (igToken && igToken.instagramAccountId) {
+    igProfile = await getIgProfile(igToken.instagramAccountId, readToken(igToken.accessToken)).catch(() => null);
+  }
+
+  // Render the custom story creative ONCE (it's identical for IG and FB) when the
+  // post has a saved layout. Only image posts get the reshare-look card; video
+  // posts publish the video itself as the story. Best-effort: a render failure
+  // falls back to the plain first-media story.
+  let renderedStory = null;
+  const isImagePost = post.mediaType === 'photo' || post.mediaType === 'carousel';
+  if (post.postToStory && isImagePost && post.storyLayout && Array.isArray(post.mediaUrls) && post.mediaUrls.length) {
+    try {
+      renderedStory = await renderStoryToFile({
+        layout: post.storyLayout,
+        mediaType: post.mediaType,
+        mediaUrls: post.mediaUrls,
+        caption: post.caption,
+        displayName: post.client?.businessName || post.client?.name || igProfile?.name || igProfile?.username || '',
+        username: igProfile?.username || '',
+        avatarUrl: igProfile?.avatarUrl || null,
+      });
+    } catch (err) {
+      console.warn(`Story render failed for post ${post.id}: ${err.message}`);
+    }
+  }
+
   if (igToken && igToken.instagramAccountId) {
     try {
       results.instagramResult = await publishToInstagram({
@@ -53,6 +83,8 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
         accessToken: readToken(igToken.accessToken),
         post,
         serverUrl,
+        renderedStory,
+        igProfile,
       });
     } catch (err) {
       results.instagramResult = { error: err.response?.data || err.message };
@@ -66,6 +98,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
         accessToken: readToken(fbToken.accessToken),
         post,
         serverUrl,
+        storyImageUrl: renderedStory?.url || null,
       });
     } catch (err) {
       results.facebookResult = { error: err.response?.data || err.message };
@@ -75,7 +108,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
   return results;
 }
 
-async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
+async function publishToInstagram({ igUserId, accessToken, post, serverUrl, renderedStory, igProfile }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId, thumbOffset } = post;
   const feedResult = await publishIgFeed({
     igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
@@ -84,7 +117,10 @@ async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
   let storyResult = null;
   if (postToStory) {
     try {
-      storyResult = await publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl });
+      storyResult = await publishIgStory({
+        igUserId, accessToken, mediaType, mediaUrls, serverUrl, renderedStory,
+        username: igProfile?.username || null,
+      });
     } catch (err) {
       storyResult = { error: err.response?.data || err.message };
     }
@@ -159,14 +195,19 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   return { mediaId: data.id, creationId, permalink };
 }
 
-async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl }) {
+async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, renderedStory, username }) {
   const isVideo = mediaType === 'video';
   // Stories require media_type=STORIES. The old `is_story` flag was not a real
   // Graph API param, so the container fell back to a normal (caption-less) feed
   // post — which is what caused the duplicate Instagram post.
+  //
+  // Image posts use the rendered story creative (the reshare-look card) when the
+  // user customized one; otherwise we fall back to the post's first image. Video
+  // posts always publish the video itself as the story.
+  const storyImage = renderedStory?.url || mediaUrls[0];
   const params = isVideo
     ? { media_type: 'STORIES', video_url: `${serverUrl}${mediaUrls[0]}` }
-    : { media_type: 'STORIES', image_url: `${serverUrl}${mediaUrls[0]}` };
+    : { media_type: 'STORIES', image_url: `${serverUrl}${storyImage}` };
 
   params.access_token = accessToken;
 
@@ -174,11 +215,11 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
   // This is the only interactive element Graph exposes on stories (user_tags,
   // added 2025-07-09). Link stickers and "share a feed post to story" are NOT
   // available via the API on Instagram or Facebook, so a self-mention is the
-  // closest sanctioned tap-through. x/y are optional for stories; we drop the
-  // tag near the bottom-center so it sits over the media.
-  const username = await getIgUsername(igUserId, accessToken);
+  // closest sanctioned tap-through. We place it where the editor put the mention
+  // sticker (if any), else bottom-center over the media. x/y are optional.
   if (username) {
-    params.user_tags = [{ username, x: 0.5, y: 0.92 }];
+    const at = renderedStory?.mention || { username, x: 0.5, y: 0.92 };
+    params.user_tags = [{ username, x: at.x, y: at.y }];
   }
 
   const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
@@ -192,20 +233,20 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
   return { mediaId: data.id };
 }
 
-// Look up the connected account's own username so we can mention it on a story.
-// Best-effort: if it fails, the story still publishes, just without the mention.
-async function getIgUsername(igUserId, accessToken) {
+// Look up the connected account's username, display name, and avatar — used for
+// the rendered story card and the @mention. Best-effort.
+async function getIgProfile(igUserId, accessToken) {
   try {
     const { data } = await axios.get(`${GRAPH}/${igUserId}`, {
-      params: { fields: 'username', access_token: accessToken },
+      params: { fields: 'username,name,profile_picture_url', access_token: accessToken },
     });
-    return data.username || null;
+    return { username: data.username || null, name: data.name || null, avatarUrl: data.profile_picture_url || null };
   } catch (_) {
     return null;
   }
 }
 
-async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
+async function publishToFacebook({ pageId, accessToken, post, serverUrl, storyImageUrl }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId } = post;
   let feedResult;
 
@@ -227,7 +268,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
 
     // Share to Facebook story after feed post
     if (postToStory) {
-      const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+      const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
       return { feed: feedResult, story: storyResult };
     }
   } else if (mediaType === 'carousel' || mediaType === 'photo') {
@@ -255,7 +296,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
       if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
 
       if (postToStory) {
-        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
         return { feed: feedResult, story: storyResult };
       }
     } else {
@@ -272,7 +313,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
       if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
 
       if (postToStory) {
-        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl });
+        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
         return { feed: feedResult, story: storyResult };
       }
     }
@@ -281,7 +322,7 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
   return { feed: feedResult };
 }
 
-async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl }) {
+async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl }) {
   try {
     if (mediaType === 'video') {
       // Facebook video stories require a 3-phase upload: start → upload the
@@ -310,9 +351,10 @@ async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serve
       });
       return { storyId: data.post_id || videoId };
     } else {
-      // For photos, upload unpublished then share to story
+      // For photos, upload unpublished then share to story. Use the rendered
+      // reshare-look creative when the user customized one, else the first image.
       const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
-        url: `${serverUrl}${mediaUrls[0]}`,
+        url: `${serverUrl}${storyImageUrl || mediaUrls[0]}`,
         published: false,
         access_token: accessToken,
       });

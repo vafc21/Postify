@@ -44,6 +44,25 @@ const uploadMedia = multer({
   },
 });
 
+// Story background images live in their own folder so clearing post media never
+// removes a custom story background.
+const storyAssetStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../uploads/stories/assets');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => cb(null, `${uuidv4()}${MEDIA_EXTENSIONS[file.mimetype] || '.jpg'}`),
+});
+const uploadStoryAsset = multer({
+  storage: storyAssetStorage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') && MEDIA_EXTENSIONS[file.mimetype]) return cb(null, true);
+    cb(new Error('Story backgrounds must be an image (JPG, PNG, GIF, or WebP).'));
+  },
+});
+
 function unlinkMediaFiles(mediaUrls = []) {
   for (const url of mediaUrls) {
     if (!url || !url.startsWith('/uploads/')) continue;
@@ -51,6 +70,57 @@ function unlinkMediaFiles(mediaUrls = []) {
     fs.unlink(abs, (err) => {
       if (err && err.code !== 'ENOENT') console.warn(`Failed to delete media ${abs}:`, err.message);
     });
+  }
+}
+
+// Coerce a client-supplied story layout into a known, bounded shape before we
+// store it. The renderer also clamps defensively, but validating here keeps the
+// DB clean and stops oversized/garbage layouts (huge fonts, 10k elements, SSRF
+// URLs) at the door. Returns null to clear, or throws on a non-object payload.
+const BG_TYPES = new Set(['auto', 'color', 'gradient', 'image']);
+const EL_TYPES = new Set(['post', 'text', 'mention']);
+const TEXT_ALIGN = new Set(['left', 'center', 'right']);
+const num = (v, min, max, d) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : d;
+};
+
+function sanitizeStoryLayout(input) {
+  if (input === null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid story layout');
+
+  const bgIn = input.background && typeof input.background === 'object' ? input.background : {};
+  const bgType = BG_TYPES.has(bgIn.type) ? bgIn.type : 'auto';
+  const background = { type: bgType };
+  if (bgType === 'color' || bgType === 'gradient') background.value = typeof bgIn.value === 'string' ? bgIn.value.slice(0, 400) : '';
+  if (bgType === 'image') background.url = typeof bgIn.url === 'string' && bgIn.url.startsWith('/uploads/') ? bgIn.url : null;
+
+  const elements = (Array.isArray(input.elements) ? input.elements : [])
+    .slice(0, 50)
+    .filter((e) => e && EL_TYPES.has(e.type))
+    .map((e) => {
+      const el = { type: e.type, x: num(e.x, 0, 1, 0.5), y: num(e.y, 0, 1, 0.5), rotation: num(e.rotation, -360, 360, 0) };
+      if (typeof e.id === 'string') el.id = e.id.slice(0, 40);
+      if (e.type === 'post') el.width = num(e.width, 0.2, 1, 0.62);
+      if (e.type === 'text') {
+        el.text = String(e.text || '').slice(0, 200);
+        el.size = num(e.size, 8, 200, 56);
+        el.color = typeof e.color === 'string' ? e.color.slice(0, 32) : '#ffffff';
+        el.bold = e.bold !== false;
+        el.align = TEXT_ALIGN.has(e.align) ? e.align : 'center';
+      }
+      return el;
+    });
+
+  return { version: 1, background, elements };
+}
+
+// A story background asset that's no longer referenced should be deleted.
+function unlinkOrphanStoryBackground(oldLayout, newLayout) {
+  const oldUrl = oldLayout?.background?.type === 'image' ? oldLayout.background.url : null;
+  const newUrl = newLayout?.background?.type === 'image' ? newLayout.background.url : null;
+  if (oldUrl && oldUrl !== newUrl && oldUrl.startsWith('/uploads/stories/assets/')) {
+    unlinkMediaFiles([oldUrl]);
   }
 }
 
@@ -189,19 +259,44 @@ router.post('/:id/media', auth, runUpload(uploadMedia.array('media', 10)), async
   }
 });
 
+// POST /api/posts/:id/story-asset — upload a custom background image for the
+// story editor. Returns the public URL to drop into the layout's background.
+router.post('/:id/story-asset', auth, runUpload(uploadStoryAsset.single('asset')), async (req, res) => {
+  try {
+    const post = await findPost(req.params.id, req.userId);
+    if (!post) {
+      // Multer already wrote the file — don't leave it orphaned on a bad request.
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    res.json({ url: `/uploads/stories/assets/${req.file.filename}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to upload story background' });
+  }
+});
+
 // PUT /api/posts/:id
 router.put('/:id', auth, async (req, res) => {
   try {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    const { caption, postToStory, location, locationId, storyLink, thumbOffset, scheduledFor } = req.body;
+    const { caption, postToStory, location, locationId, storyLayout, thumbOffset, scheduledFor } = req.body;
     const data = {};
     if (caption !== undefined) data.caption = caption;
     if (postToStory !== undefined) data.postToStory = postToStory;
     if (location !== undefined) data.location = location;
     if (locationId !== undefined) data.locationId = locationId;
-    if (storyLink !== undefined) data.storyLink = storyLink;
+    if (storyLayout !== undefined) {
+      try {
+        data.storyLayout = sanitizeStoryLayout(storyLayout); // null clears the custom story
+        unlinkOrphanStoryBackground(post.storyLayout, data.storyLayout);
+      } catch {
+        return res.status(400).json({ error: 'Invalid story layout' });
+      }
+    }
     if (thumbOffset !== undefined) data.thumbOffset = thumbOffset === '' ? null : Number(thumbOffset);
     if (scheduledFor !== undefined) {
       if (['posting', 'posted'].includes(post.status)) {

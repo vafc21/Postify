@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
-import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, Link, ExternalLink, Pencil, Check, X } from 'lucide-react';
+import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, ExternalLink, Pencil, Check, X } from 'lucide-react';
 import api from '../api';
+import StoryEditor from './StoryEditor';
 
 function postLinks(post) {
   const links = [];
@@ -16,9 +17,9 @@ export default function MediaSlot({ post, onChange }) {
   const [caption, setCaption] = useState(post.caption || '');
   const [location, setLocation] = useState(post.location || '');
   const [locationId, setLocationId] = useState(post.locationId || '');
-  const [storyLink, setStoryLink] = useState(post.storyLink || '');
   const [thumbOffset, setThumbOffset] = useState(post.thumbOffset != null ? String(post.thumbOffset) : '');
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [showStoryEditor, setShowStoryEditor] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState('');
@@ -324,18 +325,16 @@ export default function MediaSlot({ post, onChange }) {
               </div>
             </div>
 
-            {/* Story link / mention */}
-            {post.postToStory && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <Link size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-                <input
-                  style={miniInputStyle}
-                  placeholder="Story link or mention URL"
-                  value={storyLink}
-                  onChange={e => setStoryLink(e.target.value)}
-                  onBlur={() => saveField({ storyLink })}
-                />
-              </div>
+            {/* Custom story editor — design the reshare-look story creative */}
+            {post.postToStory && hasMedia && post.mediaType !== 'video' && (
+              <button
+                onClick={() => setShowStoryEditor(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 9px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'var(--bg-3)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', alignSelf: 'flex-start' }}>
+                <Pencil size={11} /> {post.storyLayout ? 'Edit story · customized' : 'Edit story'}
+              </button>
+            )}
+            {post.postToStory && post.mediaType === 'video' && (
+              <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>Video posts publish the video itself as the story.</div>
             )}
 
             {/* Video thumbnail offset */}
@@ -357,10 +356,10 @@ export default function MediaSlot({ post, onChange }) {
         )}
 
         {/* Show saved values as compact chips when collapsed */}
-        {!showExtra && (post.location || post.storyLink || post.thumbOffset != null) && (
+        {!showExtra && (post.location || post.storyLayout || post.thumbOffset != null) && (
           <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {post.location && <Chip icon={<MapPin size={9} />} label={post.location} />}
-            {post.storyLink && <Chip icon={<Link size={9} />} label="Story link set" />}
+            {post.storyLayout && <Chip icon={<Pencil size={9} />} label="Story customized" />}
             {post.thumbOffset != null && <Chip label={`Cover @ ${post.thumbOffset}ms`} />}
           </div>
         )}
@@ -374,6 +373,15 @@ export default function MediaSlot({ post, onChange }) {
             : <img src={previewUrl} style={{ maxWidth: '90vw', maxHeight: '85vh', borderRadius: 8, objectFit: 'contain' }} alt="preview" onClick={e => e.stopPropagation()} />
           }
         </div>
+      )}
+
+      {showStoryEditor && (
+        <StoryEditor
+          post={post}
+          displayName={post.client?.businessName || post.client?.name}
+          onClose={() => setShowStoryEditor(false)}
+          onChange={onChange}
+        />
       )}
     </div>
   );
