@@ -88,7 +88,9 @@ function backgroundLayer(bg, ctx) {
 
 function postCard(el, ctx) {
   const cardW = clamp01(el.width || 0.62) * W;
-  const photoH = Math.round(cardW * 0.82);
+  // Square photo area + object-fit:contain shows the WHOLE post image uncropped
+  // (a square post fills it exactly; other ratios sit centered on white).
+  const photoH = cardW;
   const avatar = ctx.avatarUri
     ? img(ctx.avatarUri, { width: 56, height: 56, borderRadius: 28 })
     : h('div', { width: 56, height: 56, borderRadius: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', color: '#fff', fontSize: 26, fontWeight: 700 }, (ctx.displayName || '?').slice(0, 1).toUpperCase());
@@ -103,7 +105,8 @@ function postCard(el, ctx) {
   ]);
 
   const photo = ctx.photoUri
-    ? img(ctx.photoUri, { width: cardW, height: photoH, objectFit: 'cover' })
+    ? h('div', { width: cardW, height: photoH, display: 'flex', backgroundColor: '#ffffff' },
+        img(ctx.photoUri, { width: cardW, height: photoH, objectFit: 'contain' }))
     : h('div', { width: cardW, height: photoH, display: 'flex', backgroundImage: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' });
 
   const children = [header, photo];

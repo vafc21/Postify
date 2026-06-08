@@ -345,8 +345,10 @@ function EditableElement({ el, selected, scale, name, photoUrl, caption, carouse
             </div>
           </div>
           {photoUrl
-            ? <img src={photoUrl} alt="" style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />
-            : <div style={{ width: '100%', height: cardW * 0.82, background: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' }} />}
+            ? <div style={{ width: '100%', height: cardW, background: '#fff', display: 'flex' }}>
+                <img src={photoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+              </div>
+            : <div style={{ width: '100%', height: cardW, background: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' }} />}
           {caption && <div style={{ padding: `${16 * scale}px ${20 * scale}px`, fontSize: 24 * scale, color: '#1c1e21', lineHeight: 1.35 }}>{caption.slice(0, 90)}</div>}
         </div>
       </div>
