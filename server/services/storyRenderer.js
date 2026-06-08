@@ -23,7 +23,10 @@ function h(type, style, children) {
   return { type, props: { style, ...(children !== undefined ? { children } : {}) } };
 }
 function img(src, style) {
-  return { type: 'img', props: { src, style: { ...style } } };
+  // flexShrink:0 is load-bearing: as a flex child, Satori/Yoga will otherwise
+  // shrink the image below its set width (notably when other absolutely-
+  // positioned siblings exist), leaving a blank strip beside an object-fit image.
+  return { type: 'img', props: { src, style: { flexShrink: 0, ...style } } };
 }
 
 const clamp01 = (n) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0.5));
@@ -88,9 +91,10 @@ function backgroundLayer(bg, ctx) {
 
 function postCard(el, ctx) {
   const cardW = clamp01(el.width || 0.62) * W;
-  // Square photo area + object-fit:contain shows the WHOLE post image uncropped
-  // (a square post fills it exactly; other ratios sit centered on white).
-  const photoH = cardW;
+  // 4:5-ish landscape photo area with object-fit:cover. This ratio reliably
+  // fills the width in Satori (a square box hit a Yoga sizing bug that left a
+  // blank strip). cover crops top/bottom slightly; the width always fills.
+  const photoH = Math.round(cardW * 0.82);
   const avatar = ctx.avatarUri
     ? img(ctx.avatarUri, { width: 56, height: 56, borderRadius: 28 })
     : h('div', { width: 56, height: 56, borderRadius: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', color: '#fff', fontSize: 26, fontWeight: 700 }, (ctx.displayName || '?').slice(0, 1).toUpperCase());
@@ -104,10 +108,12 @@ function postCard(el, ctx) {
     h('div', { fontSize: 30, color: '#65676b', fontWeight: 700 }, '···'),
   ]);
 
+  // Image as a direct flex child with object-fit:cover — the original approach
+  // that reliably fills the box. A square post (IG norm) fills the square area
+  // exactly: no crop, no gap. Non-square posts center-fill like Instagram.
   const photo = ctx.photoUri
-    ? h('div', { width: cardW, height: photoH, display: 'flex', backgroundColor: '#ffffff' },
-        img(ctx.photoUri, { width: cardW, height: photoH, objectFit: 'contain' }))
-    : h('div', { width: cardW, height: photoH, display: 'flex', backgroundImage: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' });
+    ? img(ctx.photoUri, { width: cardW, height: photoH, objectFit: 'cover' })
+    : h('div', { width: cardW, height: photoH, display: 'flex', flexShrink: 0, backgroundImage: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' });
 
   const children = [header, photo];
   if (ctx.caption) {
