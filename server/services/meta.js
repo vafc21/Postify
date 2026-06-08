@@ -14,6 +14,12 @@ function formatPlaceAddress(loc = {}) {
   return [loc.street, loc.city, loc.state, loc.country].filter(Boolean).join(', ');
 }
 
+// Pull the most specific message out of a failed Graph API call so callers can
+// surface the real reason (e.g. a missing capability) instead of a generic one.
+function graphErrorMessage(err) {
+  return err?.response?.data?.error?.message || err?.message || 'Unknown error';
+}
+
 // Typeahead search for taggable places. /pages/search is the only supported
 // place search since the dedicated Places Search API was deprecated (2020); it
 // returns Facebook Place Pages whose IDs work as both the Instagram location_id
@@ -70,7 +76,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
 }
 
 async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
-  const { mediaType, mediaUrls, caption, postToStory, locationId, storyLink, thumbOffset } = post;
+  const { mediaType, mediaUrls, caption, postToStory, locationId, thumbOffset } = post;
   const feedResult = await publishIgFeed({
     igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
   });
@@ -78,7 +84,7 @@ async function publishToInstagram({ igUserId, accessToken, post, serverUrl }) {
   let storyResult = null;
   if (postToStory) {
     try {
-      storyResult = await publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink });
+      storyResult = await publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl });
     } catch (err) {
       storyResult = { error: err.response?.data || err.message };
     }
@@ -153,7 +159,7 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   return { mediaId: data.id, creationId, permalink };
 }
 
-async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, storyLink }) {
+async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl }) {
   const isVideo = mediaType === 'video';
   // Stories require media_type=STORIES. The old `is_story` flag was not a real
   // Graph API param, so the container fell back to a normal (caption-less) feed
@@ -164,9 +170,15 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
 
   params.access_token = accessToken;
 
-  if (storyLink) {
-    // Attach as a link sticker so viewers can tap through to the URL
-    params.link_sticker = { link: storyLink };
+  // Mention the account on the story so viewers can tap through to its profile.
+  // This is the only interactive element Graph exposes on stories (user_tags,
+  // added 2025-07-09). Link stickers and "share a feed post to story" are NOT
+  // available via the API on Instagram or Facebook, so a self-mention is the
+  // closest sanctioned tap-through. x/y are optional for stories; we drop the
+  // tag near the bottom-center so it sits over the media.
+  const username = await getIgUsername(igUserId, accessToken);
+  if (username) {
+    params.user_tags = [{ username, x: 0.5, y: 0.92 }];
   }
 
   const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
@@ -178,6 +190,19 @@ async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, ser
     access_token: accessToken,
   });
   return { mediaId: data.id };
+}
+
+// Look up the connected account's own username so we can mention it on a story.
+// Best-effort: if it fails, the story still publishes, just without the mention.
+async function getIgUsername(igUserId, accessToken) {
+  try {
+    const { data } = await axios.get(`${GRAPH}/${igUserId}`, {
+      params: { fields: 'username', access_token: accessToken },
+    });
+    return data.username || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function publishToFacebook({ pageId, accessToken, post, serverUrl }) {
@@ -368,6 +393,7 @@ module.exports = {
   getLongLivedToken,
   getPagesAndIgAccounts,
   searchPlaces,
+  graphErrorMessage,
   deleteIgPost,
   deleteFbPost,
 };

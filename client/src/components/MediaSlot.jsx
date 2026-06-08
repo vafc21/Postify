@@ -26,6 +26,7 @@ export default function MediaSlot({ post, onChange }) {
   const [placeResults, setPlaceResults] = useState([]);
   const [searchingPlaces, setSearchingPlaces] = useState(false);
   const [showPlaceList, setShowPlaceList] = useState(false);
+  const [placeError, setPlaceError] = useState('');
   const placeTimer = useRef();
   const justSelectedPlace = useRef(false);
   const fileRef = useRef();
@@ -83,12 +84,14 @@ export default function MediaSlot({ post, onChange }) {
     clearTimeout(placeTimer.current);
     if (value.trim().length < 2) {
       setPlaceResults([]);
+      setPlaceError('');
       setShowPlaceList(false);
       return;
     }
     placeTimer.current = setTimeout(async () => {
       setSearchingPlaces(true);
       setShowPlaceList(true);
+      setPlaceError('');
       try {
         const { data } = await api.get('/posts/places/search', {
           params: { clientId: post.clientId, q: value.trim() },
@@ -96,6 +99,7 @@ export default function MediaSlot({ post, onChange }) {
         setPlaceResults(data);
       } catch (err) {
         setPlaceResults([]);
+        setPlaceError(err.response?.data?.error || 'Location search failed. Please try again.');
       } finally {
         setSearchingPlaces(false);
       }
@@ -297,10 +301,13 @@ export default function MediaSlot({ post, onChange }) {
                 {showPlaceList && (
                   <div style={dropdownStyle}>
                     {searchingPlaces && <div style={dropdownMsgStyle}>Searching…</div>}
-                    {!searchingPlaces && placeResults.length === 0 && (
+                    {!searchingPlaces && placeError && (
+                      <div style={{ ...dropdownMsgStyle, color: 'var(--danger)', whiteSpace: 'normal' }}>{placeError}</div>
+                    )}
+                    {!searchingPlaces && !placeError && placeResults.length === 0 && (
                       <div style={dropdownMsgStyle}>No matching places found</div>
                     )}
-                    {placeResults.map(p => (
+                    {!searchingPlaces && !placeError && placeResults.map(p => (
                       <div
                         key={p.id}
                         style={dropdownItemStyle}

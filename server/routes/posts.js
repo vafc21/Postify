@@ -6,7 +6,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
-const { deleteIgPost, deleteFbPost, searchPlaces } = require('../services/meta');
+const { deleteIgPost, deleteFbPost, searchPlaces, graphErrorMessage } = require('../services/meta');
 const { readToken, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
@@ -104,8 +104,12 @@ router.get('/places/search', auth, async (req, res) => {
     const places = await searchPlaces(q.trim(), readToken(tokenRecord.accessToken), appSecret);
     res.json(places);
   } catch (err) {
+    const detail = graphErrorMessage(err);
     console.error('Place search failed:', err.response?.data || err.message);
-    res.status(502).json({ error: 'Place search failed' });
+    // Surface Meta's actual reason — most often a missing capability
+    // ("Page Public Content Access") or an invalid/expired token — so the
+    // user can act on it instead of seeing an unexplained empty result box.
+    res.status(502).json({ error: `Location search failed: ${detail}` });
   }
 });
 
