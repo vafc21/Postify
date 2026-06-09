@@ -251,12 +251,13 @@ function textBox(el) {
 }
 
 function mentionSticker(el, ctx) {
+  const s = Math.max(0.6, Math.min(2.2, Number(el.scale) || 1));
   return placed(el, {
     backgroundColor: 'rgba(0,0,0,0.55)',
-    border: '2px solid rgba(255,255,255,0.25)',
-    borderRadius: 16,
-    padding: '14px 22px',
-  }, h('div', { fontSize: 30, fontWeight: 700, color: '#ffffff' }, `@${ctx.username || ''}`));
+    border: `${Math.max(1, Math.round(2 * s))}px solid rgba(255,255,255,0.25)`,
+    borderRadius: 16 * s,
+    padding: `${14 * s}px ${22 * s}px`,
+  }, h('div', { fontSize: 30 * s, fontWeight: 700, color: '#ffffff' }, `@${ctx.username || ''}`));
 }
 
 function elementNode(el, ctx) {

@@ -27,8 +27,8 @@ function defaultLayout() {
     version: 1,
     background: { type: 'gradient', value: 'linear-gradient(160deg,#f7971e,#ffd200)' },
     elements: [
-      { id: 'post', type: 'post', x: 0.5, y: 0.42, width: 0.62, rotation: 0 },
-      { id: 'mention', type: 'mention', x: 0.5, y: 0.74, rotation: 0 },
+      { id: 'post', type: 'post', x: 0.5, y: 0.42, width: 0.72, rotation: 0 },
+      { id: 'mention', type: 'mention', x: 0.5, y: 0.78, rotation: 0, scale: 1 },
     ],
   };
 }
@@ -354,10 +354,11 @@ function EditableElement({ el, selected, scale, name, photoUrl, caption, carouse
   }
 
   if (el.type === 'mention') {
+    const ms = el.scale || 1;
     return (
       <div ref={ref} style={wrap} onPointerDown={(e) => onDragStart(e, el)} onClick={onSelect}>
         {handles}
-        <div style={{ background: 'rgba(0,0,0,0.55)', border: `${Math.max(1, 2 * scale)}px solid rgba(255,255,255,0.25)`, borderRadius: 16 * scale, padding: `${14 * scale}px ${22 * scale}px`, color: '#fff', fontSize: 30 * scale, fontWeight: 700 }}>
+        <div style={{ background: 'rgba(0,0,0,0.55)', border: `${Math.max(1, 2 * scale * ms)}px solid rgba(255,255,255,0.25)`, borderRadius: 16 * scale * ms, padding: `${14 * scale * ms}px ${22 * scale * ms}px`, color: '#fff', fontSize: 30 * scale * ms, fontWeight: 700 }}>
           @{displayHandle(name)}
         </div>
       </div>
@@ -394,6 +395,9 @@ function ElementControls({ el, onChange, onRemove }) {
     return (
       <>
         <div style={hintBox}>Your feed post, composited so it looks like a native share. Pulled from this post automatically — drag to reposition.</div>
+        <Field label={`Size · ${Math.round((el.width || 0.72) * 100)}%`}>
+          <input type="range" min="30" max="100" value={Math.round((el.width || 0.72) * 100)} onChange={(e) => onChange({ width: Number(e.target.value) / 100 })} style={{ width: '100%', accentColor: 'var(--primary)' }} />
+        </Field>
         <RotationField el={el} onChange={onChange} />
       </>
     );
@@ -402,6 +406,9 @@ function ElementControls({ el, onChange, onRemove }) {
     return (
       <>
         <div style={hintBox}>Opens your profile when tapped on Instagram. Added automatically at publish.</div>
+        <Field label={`Size · ${Math.round((el.scale || 1) * 100)}%`}>
+          <input type="range" min="60" max="220" value={Math.round((el.scale || 1) * 100)} onChange={(e) => onChange({ scale: Number(e.target.value) / 100 })} style={{ width: '100%', accentColor: 'var(--primary)' }} />
+        </Field>
         <RotationField el={el} onChange={onChange} />
         <button onClick={onRemove} style={dangerBtn}><Trash2 size={12} /> Remove mention</button>
       </>

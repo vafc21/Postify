@@ -101,7 +101,8 @@ function sanitizeStoryLayout(input) {
     .map((e) => {
       const el = { type: e.type, x: num(e.x, 0, 1, 0.5), y: num(e.y, 0, 1, 0.5), rotation: num(e.rotation, -360, 360, 0) };
       if (typeof e.id === 'string') el.id = e.id.slice(0, 40);
-      if (e.type === 'post') el.width = num(e.width, 0.2, 1, 0.62);
+      if (e.type === 'post') el.width = num(e.width, 0.2, 1, 0.72);
+      if (e.type === 'mention') el.scale = num(e.scale, 0.6, 2.2, 1);
       if (e.type === 'text') {
         el.text = String(e.text || '').slice(0, 200);
         el.size = num(e.size, 8, 200, 56);
