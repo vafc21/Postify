@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect, useCallback } from 'react';
+import { useState, useRef, useLayoutEffect } from 'react';
 import { Type, AtSign, Upload, RotateCw, Trash2, X } from 'lucide-react';
 import api from '../api';
 
@@ -33,11 +33,33 @@ function defaultLayout() {
   };
 }
 
+// Facebook stories have no @mention sticker, so the FB default omits it.
+function defaultLayoutFb() {
+  return {
+    version: 1,
+    background: { type: 'gradient', value: 'linear-gradient(160deg,#f7971e,#ffd200)' },
+    elements: [
+      { id: 'post', type: 'post', x: 0.5, y: 0.42, width: 0.72, rotation: 0 },
+    ],
+  };
+}
+
 export default function StoryEditor({ post, displayName, onClose, onChange }) {
-  const initial = post.storyLayout && Array.isArray(post.storyLayout.elements) ? post.storyLayout : defaultLayout();
-  const [background, setBackground] = useState(initial.background || { type: 'auto' });
-  const [elements, setElements] = useState(initial.elements);
+  const initIg = post.storyLayout && Array.isArray(post.storyLayout.elements) ? post.storyLayout : defaultLayout();
+  const initFb = post.storyLayoutFb && Array.isArray(post.storyLayoutFb.elements) ? post.storyLayoutFb : defaultLayoutFb();
+  // Instagram and Facebook stories are edited independently; `platform` selects
+  // which one the canvas + controls currently act on. The background/elements
+  // helpers below transparently read & write the active platform's layout, so
+  // the rest of the editor logic is unchanged.
+  const [layouts, setLayouts] = useState({ instagram: initIg, facebook: initFb });
   const [platform, setPlatform] = useState('instagram');
+  const background = layouts[platform].background || { type: 'auto' };
+  const elements = layouts[platform].elements;
+  const setBackground = (bg) =>
+    setLayouts((L) => ({ ...L, [platform]: { ...L[platform], background: typeof bg === 'function' ? bg(L[platform].background) : bg } }));
+  const setElements = (els) =>
+    setLayouts((L) => ({ ...L, [platform]: { ...L[platform], elements: typeof els === 'function' ? els(L[platform].elements) : els } }));
+  const isVideo = post.mediaType === 'video';
   const [selectedId, setSelectedId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -66,9 +88,11 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   const name = displayName || 'Your page';
   const photoUrl = post.mediaUrls?.[0] ? `${SERVER}${post.mediaUrls[0]}` : null;
 
-  const updateEl = useCallback((id, patch) => {
+  // Not memoized on purpose: setElements closes over the active `platform`, so a
+  // stale useCallback would edit the wrong platform's layout after switching tabs.
+  const updateEl = (id, patch) => {
     setElements((els) => els.map((e) => (e.id === id ? { ...e, ...patch } : e)));
-  }, []);
+  };
   const removeEl = (id) => {
     setElements((els) => els.filter((e) => e.id !== id));
     setSelectedId((s) => (s === id ? null : s));
@@ -152,10 +176,12 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   const save = async () => {
     setSaving(true);
     try {
-      // Strip transient editor-only fields (e.g. _editing) before persisting.
-      const clean = elements.map(({ _editing, ...e }) => e);
-      const layout = { version: 1, background, elements: clean };
-      const { data } = await api.put(`/posts/${post.id}`, { storyLayout: layout });
+      // Strip transient editor-only fields (e.g. _editing) before persisting,
+      // and save BOTH platforms' layouts so they stay independent.
+      const clean = (els) => els.map(({ _editing, ...e }) => e);
+      const igLayout = { version: 1, background: layouts.instagram.background, elements: clean(layouts.instagram.elements) };
+      const fbLayout = { version: 1, background: layouts.facebook.background, elements: clean(layouts.facebook.elements) };
+      const { data } = await api.put(`/posts/${post.id}`, { storyLayout: igLayout, storyLayoutFb: fbLayout });
       onChange?.(data);
       onClose();
     } catch (err) {
@@ -166,8 +192,9 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   };
 
   const resetDefault = async () => {
-    if (!confirm('Reset this story to the default layout?')) return;
-    const d = defaultLayout();
+    const label = platform === 'facebook' ? 'Facebook' : 'Instagram';
+    if (!confirm(`Reset the ${label} story to its default layout?`)) return;
+    const d = platform === 'facebook' ? defaultLayoutFb() : defaultLayout();
     setBackground(d.background);
     setElements(d.elements);
     setSelectedId(null);
@@ -202,8 +229,9 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
           {/* canvas */}
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
             <div ref={canvasRef} style={{ ...canvasBox, ...canvasBg }} onMouseDown={() => setSelectedId(null)}>
-              {/* auto background = post photo cover + scrim */}
-              {background.type === 'auto' && photoUrl && (
+              {/* auto background = post photo cover + scrim (image posts only;
+                  video posts fall back to the gradient, matching the server) */}
+              {background.type === 'auto' && photoUrl && !isVideo && (
                 <>
                   <img src={photoUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                   <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,12,18,0.55)' }} />
@@ -218,6 +246,7 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
                   scale={scale}
                   name={name}
                   photoUrl={photoUrl}
+                  isVideo={isVideo}
                   caption={post.caption}
                   carousel={post.mediaType === 'carousel'}
                   platform={platform}
@@ -240,18 +269,20 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
 
           {/* controls */}
           <div style={rail}>
-            <Section title="Preview as">
+            <Section title="Editing story for">
               <div style={seg}>
                 {['instagram', 'facebook'].map((p) => (
-                  <button key={p} onClick={() => setPlatform(p)}
+                  <button key={p} onClick={() => { setPlatform(p); setSelectedId(null); }}
                     style={{ ...segBtn, ...(platform === p ? segOn(p) : {}) }}>
                     {p === 'instagram' ? 'Instagram' : 'Facebook'}
                   </button>
                 ))}
               </div>
-              {platform === 'facebook' && (
-                <div style={hintBox}>On Facebook the story is image-only — the @mention is Instagram-only and won't be added here.</div>
-              )}
+              <div style={hintBox}>
+                {platform === 'facebook'
+                  ? 'Editing the Facebook story — independent from Instagram. The @mention sticker is Instagram-only.'
+                  : 'Editing the Instagram story — independent from Facebook.'}
+              </div>
             </Section>
 
             <Section title="Background">
@@ -288,7 +319,9 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
 
             <button onClick={resetDefault} style={{ ...btn, width: '100%', marginTop: 'auto' }}>Reset to default</button>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.5, marginTop: 10 }}>
-              Carousel posts use the first image only. On save, this exact layout is rendered to a 9:16 image and published — Facebook image-only, Instagram adds the profile @mention.
+              {isVideo
+                ? 'The video plays inside the card. On save, each platform’s layout is rendered to a 9:16 video and published independently.'
+                : 'Carousel posts use the first image. On save, each platform’s layout is rendered to a 9:16 image and published independently.'}
             </div>
           </div>
         </div>
@@ -297,7 +330,7 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   );
 }
 
-function EditableElement({ el, selected, scale, name, photoUrl, caption, carousel, platform, onSelect, onDragStart, onRotateStart, onRemove, onText, setEditing }) {
+function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption, carousel, platform, onSelect, onDragStart, onRotateStart, onRemove, onText, setEditing }) {
   const ref = useRef(null);
   const textRef = useRef(null);
 
@@ -345,7 +378,9 @@ function EditableElement({ el, selected, scale, name, photoUrl, caption, carouse
             </div>
           </div>
           {photoUrl
-            ? <img src={photoUrl} alt="" style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />
+            ? (isVideo
+                ? <video src={photoUrl} autoPlay muted loop playsInline style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />
+                : <img src={photoUrl} alt="" style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />)
             : <div style={{ width: '100%', height: cardW * 0.82, background: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' }} />}
           {caption && <div style={{ padding: `${16 * scale}px ${20 * scale}px`, fontSize: 24 * scale, color: '#1c1e21', lineHeight: 1.35 }}>{caption.slice(0, 90)}</div>}
         </div>

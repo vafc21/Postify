@@ -8,7 +8,7 @@ const { encrypt, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
-const GRAPH_AUTH = 'https://www.facebook.com/v18.0/dialog/oauth';
+const GRAPH_AUTH = 'https://www.facebook.com/v22.0/dialog/oauth';
 // pages_show_list + business_management let us discover Pages that are owned by
 // a Business Portfolio (Meta Business Suite), which otherwise don't appear via
 // /me/accounts when the user manages them through a business rather than directly.
@@ -80,7 +80,7 @@ router.get('/callback', async (req, res) => {
 
     let tokenData;
     try {
-      const response = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+      const response = await axios.get('https://graph.facebook.com/v22.0/oauth/access_token', {
         params: {
           client_id: user.metaAppId,
           client_secret: appSecret,

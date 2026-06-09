@@ -175,12 +175,19 @@ router.get('/places/search', auth, async (req, res) => {
     const places = await searchPlaces(q.trim(), readToken(tokenRecord.accessToken), appSecret);
     res.json(places);
   } catch (err) {
-    const detail = graphErrorMessage(err);
+    const metaErr = err.response?.data?.error;
     console.error('Place search failed:', err.response?.data || err.message);
-    // Surface Meta's actual reason — most often a missing capability
-    // ("Page Public Content Access") or an invalid/expired token — so the
-    // user can act on it instead of seeing an unexplained empty result box.
-    res.status(502).json({ error: `Location search failed: ${detail}` });
+    // /pages/search requires Meta's "Page Public Content Access" feature, which
+    // is granted only through App Review + Business Verification (error code 10).
+    // It can't be fixed in code, so say so plainly and steer the user to the
+    // manual Place-ID fallback instead of an unexplained empty result box.
+    if (metaErr?.code === 10 || /Public (Content|Metadata) Access/i.test(metaErr?.message || '')) {
+      return res.status(403).json({
+        code: 'needs_app_review',
+        error: 'Location search needs Meta "Page Public Content Access" (granted via App Review + Business Verification). Until that\'s approved, paste a Facebook Place ID directly to tag a location.',
+      });
+    }
+    res.status(502).json({ error: `Location search failed: ${graphErrorMessage(err)}` });
   }
 });
 
@@ -284,7 +291,7 @@ router.put('/:id', auth, async (req, res) => {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    const { caption, postToStory, location, locationId, link, storyLayout, thumbOffset, scheduledFor } = req.body;
+    const { caption, postToStory, location, locationId, link, storyLayout, storyLayoutFb, thumbOffset, scheduledFor } = req.body;
     const data = {};
     if (caption !== undefined) data.caption = caption;
     if (postToStory !== undefined) data.postToStory = postToStory;
@@ -295,6 +302,14 @@ router.put('/:id', auth, async (req, res) => {
       try {
         data.storyLayout = sanitizeStoryLayout(storyLayout); // null clears the custom story
         unlinkOrphanStoryBackground(post.storyLayout, data.storyLayout);
+      } catch {
+        return res.status(400).json({ error: 'Invalid story layout' });
+      }
+    }
+    if (storyLayoutFb !== undefined) {
+      try {
+        data.storyLayoutFb = sanitizeStoryLayout(storyLayoutFb); // independent Facebook story
+        unlinkOrphanStoryBackground(post.storyLayoutFb, data.storyLayoutFb);
       } catch {
         return res.status(400).json({ error: 'Invalid story layout' });
       }
