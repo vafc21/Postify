@@ -284,12 +284,13 @@ router.put('/:id', auth, async (req, res) => {
     const post = await findPost(req.params.id, req.userId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    const { caption, postToStory, location, locationId, storyLayout, thumbOffset, scheduledFor } = req.body;
+    const { caption, postToStory, location, locationId, link, storyLayout, thumbOffset, scheduledFor } = req.body;
     const data = {};
     if (caption !== undefined) data.caption = caption;
     if (postToStory !== undefined) data.postToStory = postToStory;
     if (location !== undefined) data.location = location;
     if (locationId !== undefined) data.locationId = locationId;
+    if (link !== undefined) data.link = link;
     if (storyLayout !== undefined) {
       try {
         data.storyLayout = sanitizeStoryLayout(storyLayout); // null clears the custom story

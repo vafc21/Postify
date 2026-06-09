@@ -96,7 +96,10 @@ model ScheduledPost {
   postToStory     Boolean  @default(true) @map("post_to_story")
   location        String?
   locationId      String?  @map("location_id")
-  storyLink       String?  @map("story_link")
+  // Optional link appended to the feed caption at publish time. Meta has no
+  // separate link field on feed posts (and no tappable story link at all), so
+  // the URL must live in the caption text. Reuses the old `story_link` column.
+  link            String?  @map("story_link")
   storyLayout     Json?    @map("story_layout")
   thumbOffset     Int?     @map("thumb_offset")
   status          String   @default("pending")

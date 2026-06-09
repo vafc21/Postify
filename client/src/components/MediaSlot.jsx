@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, ExternalLink, Pencil, Check, X } from 'lucide-react';
+import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, ExternalLink, Pencil, Check, X, Link } from 'lucide-react';
 import api from '../api';
 import StoryEditor from './StoryEditor';
 
@@ -17,6 +17,7 @@ export default function MediaSlot({ post, onChange }) {
   const [caption, setCaption] = useState(post.caption || '');
   const [location, setLocation] = useState(post.location || '');
   const [locationId, setLocationId] = useState(post.locationId || '');
+  const [link, setLink] = useState(post.link || '');
   const [thumbOffset, setThumbOffset] = useState(post.thumbOffset != null ? String(post.thumbOffset) : '');
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showStoryEditor, setShowStoryEditor] = useState(false);
@@ -325,6 +326,20 @@ export default function MediaSlot({ post, onChange }) {
               </div>
             </div>
 
+            {/* Optional link — appended to the post caption at publish time.
+                Clickable on Facebook feed; plain text on Instagram. (Tappable
+                story-link stickers aren't available through the Meta API.) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Link size={11} color={link.trim() ? 'var(--success)' : 'var(--text-muted)'} style={{ flexShrink: 0 }} />
+              <input
+                style={miniInputStyle}
+                placeholder="Add a link (appended to the caption)…"
+                value={link}
+                onChange={e => setLink(e.target.value)}
+                onBlur={() => saveField({ link })}
+              />
+            </div>
+
             {/* Custom story editor — design the reshare-look story creative */}
             {post.postToStory && hasMedia && post.mediaType !== 'video' && (
               <button
@@ -356,9 +371,10 @@ export default function MediaSlot({ post, onChange }) {
         )}
 
         {/* Show saved values as compact chips when collapsed */}
-        {!showExtra && (post.location || post.storyLayout || post.thumbOffset != null) && (
+        {!showExtra && (post.location || post.link || post.storyLayout || post.thumbOffset != null) && (
           <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {post.location && <Chip icon={<MapPin size={9} />} label={post.location} />}
+            {post.link && <Chip icon={<Link size={9} />} label="Link" />}
             {post.storyLayout && <Chip icon={<Pencil size={9} />} label="Story customized" />}
             {post.thumbOffset != null && <Chip label={`Cover @ ${post.thumbOffset}ms`} />}
           </div>

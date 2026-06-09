@@ -15,6 +15,17 @@ function formatPlaceAddress(loc = {}) {
   return [loc.street, loc.city, loc.state, loc.country].filter(Boolean).join(', ');
 }
 
+// Append a post's link to its caption on its own line. Idempotent — won't
+// duplicate a link already present in the caption. Meta exposes no separate
+// link field on feed posts, so the URL must live in the caption text
+// (clickable on Facebook, plain text on Instagram).
+function appendCaptionLink(caption, link) {
+  const url = (link || '').trim();
+  const text = caption || '';
+  if (!url || text.includes(url)) return text;
+  return text ? `${text}\n\n${url}` : url;
+}
+
 // Pull the most specific message out of a failed Graph API call so callers can
 // surface the real reason (e.g. a missing capability) instead of a generic one.
 function graphErrorMessage(err) {
@@ -36,9 +47,18 @@ async function searchPlaces(query, accessToken, appSecret) {
     },
   });
   // Keep only results that resolve to a physical place (have a location).
-  return (data.data || [])
+  const raw = data.data || [];
+  const places = raw
     .filter(p => p.location && (p.location.city || p.location.country || p.location.street))
     .map(p => ({ id: p.id, name: p.name, address: formatPlaceAddress(p.location) }));
+  // TEMP DIAGNOSTIC (remove once confirmed): distinguishes the two empty-result
+  // causes — raw=0 means Meta returned nothing (Page Public Content Access wall);
+  // raw>0 but kept=0 means pages came back without a readable `location` field.
+  console.log(
+    `[places] q=${JSON.stringify(query)} raw=${raw.length} kept=${places.length}` +
+    (raw.length ? ` sample=${JSON.stringify(raw[0])}` : '')
+  );
+  return places;
 }
 
 async function publishPost(post, tokens, appCreds, serverUrl) {
@@ -76,12 +96,18 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     }
   }
 
+  // Feed posts carry the optional link in the caption text (Meta has no separate
+  // link field). The story creative is rendered above from the ORIGINAL caption,
+  // so the raw URL never clutters the reshare-look card.
+  const feedCaption = appendCaptionLink(post.caption, post.link);
+  const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
+
   if (igToken && igToken.instagramAccountId) {
     try {
       results.instagramResult = await publishToInstagram({
         igUserId: igToken.instagramAccountId,
         accessToken: readToken(igToken.accessToken),
-        post,
+        post: feedPost,
         serverUrl,
         renderedStory,
         igProfile,
@@ -96,7 +122,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
       results.facebookResult = await publishToFacebook({
         pageId: fbToken.pageId,
         accessToken: readToken(fbToken.accessToken),
-        post,
+        post: feedPost,
         serverUrl,
         storyImageUrl: renderedStory?.url || null,
       });
@@ -436,6 +462,7 @@ module.exports = {
   getPagesAndIgAccounts,
   searchPlaces,
   graphErrorMessage,
+  appendCaptionLink,
   deleteIgPost,
   deleteFbPost,
 };
