@@ -215,7 +215,9 @@ function postCard(el, ctx) {
   // an image inside the card — it shrinks it). Here we just reserve the space
   // with a flat placeholder; PHOTO_FILL marks the area so the compositor can
   // locate the exact rectangle to paint the real photo into.
-  const photo = ctx.photoUri
+  // ctx.videoSlot marks the media area for a video composite the same way a real
+  // photo does — a flat PHOTO_FILL rectangle the compositor later locates.
+  const photo = (ctx.photoUri || ctx.videoSlot)
     ? h('div', { width: cardW, height: photoH, flexShrink: 0, display: 'flex', backgroundColor: PHOTO_FILL })
     : h('div', { width: cardW, height: photoH, display: 'flex', flexShrink: 0, backgroundImage: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' });
 
@@ -372,4 +374,62 @@ async function renderStoryToFile(opts) {
   return { url: `/uploads/stories/${filename}`, mention };
 }
 
-module.exports = { renderStoryToFile, _internal: { buildTree, toDataUri, W, H } };
+/**
+ * Render the story CARD for a video post: the same reshare-look layout, but the
+ * media slot is left as a flat PHOTO_FILL rectangle (no photo composited) so the
+ * video compositor can fill it. Returns the card PNG plus the slot rectangle.
+ * The post card is forced axis-aligned (rotation 0) so the slot is a clean rect.
+ * @returns {Promise<{url, pngPath, rect:{x,y,w,h}|null, mention, W, H}>}
+ */
+async function renderStoryCardForVideo(opts) {
+  const layout = opts.layout && typeof opts.layout === 'object' ? opts.layout : {};
+  const elements = (Array.isArray(layout.elements) ? layout.elements : []).slice(0, 50)
+    .map((e) => (e && e.type === 'post' ? { ...e, rotation: 0 } : e));
+
+  const bgUrl = layout.background && layout.background.type === 'image'
+    && typeof layout.background.url === 'string' && layout.background.url.startsWith('/uploads/')
+    ? layout.background.url : null;
+  const [bgUri, avatarUri] = await Promise.all([
+    bgUrl ? toDataUri(bgUrl) : Promise.resolve(null),
+    toDataUri(opts.avatarUrl),
+  ]);
+
+  const ctx = {
+    photoUri: null,    // no still photo — keeps applyBackground off the video path
+    videoSlot: true,   // postCard paints the slot marker for the video
+    bgUri,
+    avatarUri,
+    photoAspect: Math.max(0.6, Math.min(1.25, opts.videoAspect || 0.82)),
+    caption: (opts.caption || '').replace(/\s+/g, ' ').trim().slice(0, 90),
+    displayName: opts.displayName || opts.username || '',
+    username: opts.username || '',
+  };
+
+  const svg = await satori(buildTree({ ...layout, elements }, ctx), { width: W, height: H, fonts: FONTS });
+  const png = new Resvg(svg, { background: '#111418', fitTo: { mode: 'width', value: W } }).render().asPng();
+
+  const postEl = elements.find((e) => e && e.type === 'post');
+  let rect = null;
+  if (postEl) {
+    const cardW = clamp01(postEl.width || 0.62) * W;
+    const photoH = Math.round(cardW * ctx.photoAspect);
+    const cx = clamp01(postEl.x) * W;
+    const bb = markerBBox(decodePng(png));
+    if (bb) rect = { x: Math.round(cx - cardW / 2), y: bb.t, w: Math.round(cardW), h: photoH };
+  }
+
+  const dir = path.join(__dirname, '../uploads/stories');
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = `${uuidv4()}.png`;
+  const abs = path.join(dir, filename);
+  fs.writeFileSync(abs, png);
+
+  const mentionEl = elements.find((e) => e && e.type === 'mention');
+  const mention = mentionEl && opts.username
+    ? { username: opts.username, x: clamp01(mentionEl.x), y: clamp01(mentionEl.y) }
+    : null;
+
+  return { url: `/uploads/stories/${filename}`, pngPath: abs, rect, mention, W, H };
+}
+
+module.exports = { renderStoryToFile, renderStoryCardForVideo, _internal: { buildTree, toDataUri, W, H } };

@@ -326,6 +326,19 @@ export default function MediaSlot({ post, onChange }) {
               </div>
             </div>
 
+            {/* Manual Place ID fallback — works even when name search is gated
+                behind Meta App Review. Paste a Facebook Place ID to tag directly. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 11, flexShrink: 0, width: 11, textAlign: 'center' }}>#</span>
+              <input
+                style={miniInputStyle}
+                placeholder="…or paste a Facebook Place ID"
+                value={locationId}
+                onChange={e => setLocationId(e.target.value)}
+                onBlur={() => saveField({ location, locationId })}
+              />
+            </div>
+
             {/* Optional link — appended to the post caption at publish time.
                 Clickable on Facebook feed; plain text on Instagram. (Tappable
                 story-link stickers aren't available through the Meta API.) */}
@@ -340,16 +353,15 @@ export default function MediaSlot({ post, onChange }) {
               />
             </div>
 
-            {/* Custom story editor — design the reshare-look story creative */}
-            {post.postToStory && hasMedia && post.mediaType !== 'video' && (
+            {/* Custom story editor — design the reshare-look story creative.
+                Available for photo, carousel AND video posts; Instagram and
+                Facebook stories are edited independently inside the editor. */}
+            {post.postToStory && hasMedia && (
               <button
                 onClick={() => setShowStoryEditor(true)}
                 style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 9px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'var(--bg-3)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', alignSelf: 'flex-start' }}>
-                <Pencil size={11} /> {post.storyLayout ? 'Edit story · customized' : 'Edit story'}
+                <Pencil size={11} /> {(post.storyLayout || post.storyLayoutFb) ? 'Edit story · customized' : 'Edit story'}
               </button>
-            )}
-            {post.postToStory && post.mediaType === 'video' && (
-              <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>Video posts publish the video itself as the story.</div>
             )}
 
             {/* Video thumbnail offset */}
@@ -371,11 +383,11 @@ export default function MediaSlot({ post, onChange }) {
         )}
 
         {/* Show saved values as compact chips when collapsed */}
-        {!showExtra && (post.location || post.link || post.storyLayout || post.thumbOffset != null) && (
+        {!showExtra && (post.location || post.link || post.storyLayout || post.storyLayoutFb || post.thumbOffset != null) && (
           <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {post.location && <Chip icon={<MapPin size={9} />} label={post.location} />}
             {post.link && <Chip icon={<Link size={9} />} label="Link" />}
-            {post.storyLayout && <Chip icon={<Pencil size={9} />} label="Story customized" />}
+            {(post.storyLayout || post.storyLayoutFb) && <Chip icon={<Pencil size={9} />} label="Story customized" />}
             {post.thumbOffset != null && <Chip label={`Cover @ ${post.thumbOffset}ms`} />}
           </div>
         )}

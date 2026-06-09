@@ -100,7 +100,11 @@ model ScheduledPost {
   // separate link field on feed posts (and no tappable story link at all), so
   // the URL must live in the caption text. Reuses the old `story_link` column.
   link            String?  @map("story_link")
+  // Per-platform story creatives. `storyLayout` is the Instagram story; the
+  // Facebook story is kept fully independent so editing one never bleeds into
+  // the other. A null layout means "post the photo/video centered" (no card).
   storyLayout     Json?    @map("story_layout")
+  storyLayoutFb   Json?    @map("story_layout_fb")
   thumbOffset     Int?     @map("thumb_offset")
   status          String   @default("pending")
   attempts        Int      @default(0)

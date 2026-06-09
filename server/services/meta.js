@@ -1,9 +1,12 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { readToken } = require('../utils/encryption');
-const { renderStoryToFile } = require('./storyRenderer');
+const { renderStoryToFile, renderStoryCardForVideo } = require('./storyRenderer');
+const { ensureIgImage, ensureJpeg, ensureStoryImage, compositeVideoStory, probeMedia } = require('./mediaProcessor');
 
-const GRAPH = 'https://graph.facebook.com/v18.0';
+// v18.0 reached end-of-life; v22.0 is current and within Meta's support window.
+// Endpoint shapes used here are unchanged across these versions.
+const GRAPH = 'https://graph.facebook.com/v22.0';
 
 // Graph requires an appsecret_proof (HMAC of the token with the app secret) on
 // server-side calls when the app has "Require App Secret" enabled.
@@ -51,13 +54,6 @@ async function searchPlaces(query, accessToken, appSecret) {
   const places = raw
     .filter(p => p.location && (p.location.city || p.location.country || p.location.street))
     .map(p => ({ id: p.id, name: p.name, address: formatPlaceAddress(p.location) }));
-  // TEMP DIAGNOSTIC (remove once confirmed): distinguishes the two empty-result
-  // causes — raw=0 means Meta returned nothing (Page Public Content Access wall);
-  // raw>0 but kept=0 means pages came back without a readable `location` field.
-  console.log(
-    `[places] q=${JSON.stringify(query)} raw=${raw.length} kept=${places.length}` +
-    (raw.length ? ` sample=${JSON.stringify(raw[0])}` : '')
-  );
   return places;
 }
 
@@ -74,31 +70,57 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     igProfile = await getIgProfile(igToken.instagramAccountId, readToken(igToken.accessToken)).catch(() => null);
   }
 
-  // Render the custom story creative ONCE (it's identical for IG and FB) when the
-  // post has a saved layout. Only image posts get the reshare-look card; video
-  // posts publish the video itself as the story. Best-effort: a render failure
-  // falls back to the plain first-media story.
-  let renderedStory = null;
-  const isImagePost = post.mediaType === 'photo' || post.mediaType === 'carousel';
-  if (post.postToStory && isImagePost && post.storyLayout && Array.isArray(post.mediaUrls) && post.mediaUrls.length) {
+  const isVideoPost = post.mediaType === 'video';
+  const displayName = post.client?.businessName || post.client?.name || igProfile?.name || igProfile?.username || '';
+
+  // Build the story creative for ONE platform from ITS OWN layout, so Instagram
+  // and Facebook stories are fully independent (item #7) — editing one never
+  // bleeds into the other. A saved layout becomes the reshare-look card; with no
+  // layout the media is posted centered (item #4). Best-effort: any failure
+  // degrades to the plain media so a story still goes out.
+  //   returns { image } | { video } | null
+  async function buildStory(layout, { withMention }) {
+    if (!post.postToStory || !Array.isArray(post.mediaUrls) || !post.mediaUrls.length) return null;
+    const hasCard = layout && Array.isArray(layout.elements) && layout.elements.length > 0;
+    const username = withMention ? (igProfile?.username || '') : '';
     try {
-      renderedStory = await renderStoryToFile({
-        layout: post.storyLayout,
-        mediaType: post.mediaType,
-        mediaUrls: post.mediaUrls,
-        caption: post.caption,
-        displayName: post.client?.businessName || post.client?.name || igProfile?.name || igProfile?.username || '',
-        username: igProfile?.username || '',
-        avatarUrl: igProfile?.avatarUrl || null,
-      });
+      if (isVideoPost) {
+        if (hasCard) {
+          // Reshare-look card with the video playing inside the slot (item #5).
+          const m = await probeMedia(post.mediaUrls[0]);
+          const card = await renderStoryCardForVideo({
+            layout, caption: post.caption, displayName, username,
+            avatarUrl: igProfile?.avatarUrl || null,
+            videoAspect: m && m.width && m.height ? m.height / m.width : 0.82,
+          });
+          if (card && card.rect) {
+            const url = await compositeVideoStory({ cardAbsPath: card.pngPath, rect: card.rect, videoUrl: post.mediaUrls[0] });
+            if (url) return { video: url, mention: card.mention };
+          }
+        }
+        return { video: post.mediaUrls[0] };           // raw video fallback
+      }
+      if (hasCard) {
+        const r = await renderStoryToFile({
+          layout, mediaType: post.mediaType, mediaUrls: post.mediaUrls,
+          caption: post.caption, displayName, username,
+          avatarUrl: igProfile?.avatarUrl || null,
+        });
+        return { image: r.url, mention: r.mention };
+      }
+      return { image: await ensureStoryImage(post.mediaUrls[0]) }; // centered photo
     } catch (err) {
-      console.warn(`Story render failed for post ${post.id}: ${err.message}`);
+      console.warn(`Story build failed for post ${post.id} (${withMention ? 'ig' : 'fb'}): ${err.message}`);
+      return isVideoPost ? { video: post.mediaUrls[0] } : { image: post.mediaUrls[0] };
     }
   }
 
+  const igStory = igToken && igToken.instagramAccountId ? await buildStory(post.storyLayout, { withMention: true }) : null;
+  const fbStory = fbToken && fbToken.pageId ? await buildStory(post.storyLayoutFb, { withMention: false }) : null;
+
   // Feed posts carry the optional link in the caption text (Meta has no separate
-  // link field). The story creative is rendered above from the ORIGINAL caption,
-  // so the raw URL never clutters the reshare-look card.
+  // link field). Story creatives are rendered from the ORIGINAL caption above, so
+  // the raw URL never clutters the reshare-look card.
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
@@ -109,7 +131,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
         accessToken: readToken(igToken.accessToken),
         post: feedPost,
         serverUrl,
-        renderedStory,
+        story: igStory,
         igProfile,
       });
     } catch (err) {
@@ -124,7 +146,7 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
         accessToken: readToken(fbToken.accessToken),
         post: feedPost,
         serverUrl,
-        storyImageUrl: renderedStory?.url || null,
+        story: fbStory,
       });
     } catch (err) {
       results.facebookResult = { error: err.response?.data || err.message };
@@ -134,18 +156,17 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
   return results;
 }
 
-async function publishToInstagram({ igUserId, accessToken, post, serverUrl, renderedStory, igProfile }) {
+async function publishToInstagram({ igUserId, accessToken, post, serverUrl, story, igProfile }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId, thumbOffset } = post;
   const feedResult = await publishIgFeed({
     igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
   });
 
   let storyResult = null;
-  if (postToStory) {
+  if (postToStory && story) {
     try {
       storyResult = await publishIgStory({
-        igUserId, accessToken, mediaType, mediaUrls, serverUrl, renderedStory,
-        username: igProfile?.username || null,
+        igUserId, accessToken, story, serverUrl, username: igProfile?.username || null,
       });
     } catch (err) {
       storyResult = { error: err.response?.data || err.message };
@@ -159,8 +180,11 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   let creationId;
 
   if (mediaType === 'carousel') {
+    // Normalize every slide to a spec-safe JPEG first — IG silently rejects
+    // non-JPEG / out-of-aspect children, which is why image posts never appeared.
+    const igUrls = await Promise.all(mediaUrls.map(ensureIgImage));
     const childIds = await Promise.all(
-      mediaUrls.map(url =>
+      igUrls.map(url =>
         axios.post(`${GRAPH}/${igUserId}/media`, {
           image_url: `${serverUrl}${url}`,
           is_carousel_item: true,
@@ -179,6 +203,9 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
 
     const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
     creationId = data.id;
+    // Wait for the container to finish before publishing — without this a
+    // not-yet-ready container can fail or publish empty.
+    await waitForContainer(creationId, accessToken);
   } else if (mediaType === 'video') {
     const params = {
       media_type: 'REELS',
@@ -193,8 +220,11 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     creationId = data.id;
     await waitForContainer(creationId, accessToken);
   } else {
+    // Guarantee a JPEG within IG's allowed aspect range; non-JPEG/odd-aspect
+    // images are the reason single photos never showed up on Instagram.
+    const igUrl = await ensureIgImage(mediaUrls[0]);
     const params = {
-      image_url: `${serverUrl}${mediaUrls[0]}`,
+      image_url: `${serverUrl}${igUrl}`,
       caption,
       access_token: accessToken,
     };
@@ -202,6 +232,7 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
 
     const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
     creationId = data.id;
+    await waitForContainer(creationId, accessToken);
   }
 
   const { data } = await axios.post(`${GRAPH}/${igUserId}/media_publish`, {
@@ -221,37 +252,28 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   return { mediaId: data.id, creationId, permalink };
 }
 
-async function publishIgStory({ igUserId, accessToken, mediaType, mediaUrls, serverUrl, renderedStory, username }) {
-  const isVideo = mediaType === 'video';
-  // Stories require media_type=STORIES. The old `is_story` flag was not a real
-  // Graph API param, so the container fell back to a normal (caption-less) feed
-  // post — which is what caused the duplicate Instagram post.
-  //
-  // Image posts use the rendered story creative (the reshare-look card) when the
-  // user customized one; otherwise we fall back to the post's first image. Video
-  // posts always publish the video itself as the story.
-  const storyImage = renderedStory?.url || mediaUrls[0];
-  const params = isVideo
-    ? { media_type: 'STORIES', video_url: `${serverUrl}${mediaUrls[0]}` }
-    : { media_type: 'STORIES', image_url: `${serverUrl}${storyImage}` };
+async function publishIgStory({ igUserId, accessToken, story, serverUrl, username }) {
+  const isVideo = !!story.video;
+  // Stories require media_type=STORIES. Image stories must be JPEG (the rendered
+  // card is a PNG), so convert best-effort or the story silently fails to appear.
+  const params = { media_type: 'STORIES', access_token: accessToken };
+  if (isVideo) {
+    params.video_url = `${serverUrl}${story.video}`;
+  } else {
+    const img = await ensureJpeg(story.image);
+    params.image_url = `${serverUrl}${img}`;
+  }
 
-  params.access_token = accessToken;
-
-  // Mention the account on the story so viewers can tap through to its profile.
-  // This is the only interactive element Graph exposes on stories (user_tags,
-  // added 2025-07-09). Link stickers and "share a feed post to story" are NOT
-  // available via the API on Instagram or Facebook, so a self-mention is the
-  // closest sanctioned tap-through. We place it where the editor put the mention
-  // sticker (if any), else bottom-center over the media. x/y are optional.
+  // A self-mention is the only interactive element Graph exposes on stories
+  // (user_tags, added 2025-07-09) — link stickers are not available via the API.
+  // Place it at the editor's mention coords when present, else bottom-center.
   if (username) {
-    const at = renderedStory?.mention || { username, x: 0.5, y: 0.92 };
+    const at = story.mention || { x: 0.5, y: 0.92 };
     params.user_tags = [{ username, x: at.x, y: at.y }];
   }
 
   const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
-
   if (isVideo) await waitForContainer(container.id, accessToken);
-
   const { data } = await axios.post(`${GRAPH}/${igUserId}/media_publish`, {
     creation_id: container.id,
     access_token: accessToken,
@@ -272,7 +294,7 @@ async function getIgProfile(igUserId, accessToken) {
   }
 }
 
-async function publishToFacebook({ pageId, accessToken, post, serverUrl, storyImageUrl }) {
+async function publishToFacebook({ pageId, accessToken, post, serverUrl, story }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId } = post;
   let feedResult;
 
@@ -286,71 +308,46 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl, storyIm
 
     const { data } = await axios.post(`${GRAPH}/${pageId}/videos`, params);
     feedResult = { videoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
+    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+  } else if (mediaUrls.length > 1) {
+    const photoIds = await Promise.all(
+      mediaUrls.map(url =>
+        axios.post(`${GRAPH}/${pageId}/photos`, {
+          url: `${serverUrl}${url}`,
+          published: false,
+          access_token: accessToken,
+        }).then(r => ({ media_fbid: r.data.id }))
+      )
+    );
 
-    // Auto-like our own post after it publishes
-    if (data.id) {
-      await likeFbPost(data.id, accessToken).catch(() => {});
-    }
+    const params = { message: caption, attached_media: photoIds, access_token: accessToken };
+    if (locationId) params.place = locationId;
 
-    // Share to Facebook story after feed post
-    if (postToStory) {
-      const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
-      return { feed: feedResult, story: storyResult };
-    }
-  } else if (mediaType === 'carousel' || mediaType === 'photo') {
-    if (mediaUrls.length > 1) {
-      const photoIds = await Promise.all(
-        mediaUrls.map(url =>
-          axios.post(`${GRAPH}/${pageId}/photos`, {
-            url: `${serverUrl}${url}`,
-            published: false,
-            access_token: accessToken,
-          }).then(r => ({ media_fbid: r.data.id }))
-        )
-      );
+    const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, params);
+    feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
+    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+  } else {
+    const params = { url: `${serverUrl}${mediaUrls[0]}`, message: caption, access_token: accessToken };
+    if (locationId) params.place = locationId;
 
-      const params = {
-        message: caption,
-        attached_media: photoIds,
-        access_token: accessToken,
-      };
-      if (locationId) params.place = locationId;
-
-      const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, params);
-      feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
-
-      if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
-
-      if (postToStory) {
-        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
-        return { feed: feedResult, story: storyResult };
-      }
-    } else {
-      const params = {
-        url: `${serverUrl}${mediaUrls[0]}`,
-        message: caption,
-        access_token: accessToken,
-      };
-      if (locationId) params.place = locationId;
-
-      const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, params);
-      feedResult = { photoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
-
-      if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
-
-      if (postToStory) {
-        const storyResult = await publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl });
-        return { feed: feedResult, story: storyResult };
-      }
-    }
+    const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, params);
+    feedResult = { photoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
+    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
   }
 
-  return { feed: feedResult };
+  // Share to the Facebook story using FACEBOOK's own creative (item #7) — the
+  // FB story is built from post.storyLayoutFb upstream, never from IG's layout.
+  let storyResult = null;
+  if (postToStory && story) {
+    storyResult = await publishFbStory({ pageId, accessToken, story, serverUrl });
+  }
+
+  return storyResult ? { feed: feedResult, story: storyResult } : { feed: feedResult };
 }
 
-async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serverUrl, storyImageUrl }) {
+async function publishFbStory({ pageId, accessToken, story, serverUrl }) {
   try {
-    if (mediaType === 'video') {
+    if (story.video) {
       // Facebook video stories require a 3-phase upload: start → upload the
       // hosted file → finish. A single finish call with file_url does nothing.
       const { data: start } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
@@ -363,7 +360,7 @@ async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serve
       await axios.post(start.upload_url, null, {
         headers: {
           Authorization: `OAuth ${accessToken}`,
-          file_url: `${serverUrl}${mediaUrls[0]}`,
+          file_url: `${serverUrl}${story.video}`,
         },
       });
 
@@ -376,20 +373,19 @@ async function publishFbStory({ pageId, accessToken, mediaType, mediaUrls, serve
         access_token: accessToken,
       });
       return { storyId: data.post_id || videoId };
-    } else {
-      // For photos, upload unpublished then share to story. Use the rendered
-      // reshare-look creative when the user customized one, else the first image.
-      const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
-        url: `${serverUrl}${storyImageUrl || mediaUrls[0]}`,
-        published: false,
-        access_token: accessToken,
-      });
-      const { data } = await axios.post(`${GRAPH}/${pageId}/photo_stories`, {
-        photo_id: photo.id,
-        access_token: accessToken,
-      });
-      return { storyId: data.post_id || data.id };
     }
+
+    // Photo story: upload unpublished, then share to story.
+    const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
+      url: `${serverUrl}${story.image}`,
+      published: false,
+      access_token: accessToken,
+    });
+    const { data } = await axios.post(`${GRAPH}/${pageId}/photo_stories`, {
+      photo_id: photo.id,
+      access_token: accessToken,
+    });
+    return { storyId: data.post_id || data.id };
   } catch (err) {
     return { error: err.response?.data || err.message };
   }
