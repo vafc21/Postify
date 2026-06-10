@@ -1,6 +1,6 @@
 const axios = require('axios');
 const crypto = require('crypto');
-const { readToken } = require('../utils/encryption');
+const { readToken, decrypt } = require('../utils/encryption');
 const { renderStoryToFile, renderStoryCardForVideo } = require('./storyRenderer');
 const { ensureIgImage, ensureJpeg, ensureStoryImage, compositeVideoStory, probeMedia } = require('./mediaProcessor');
 
@@ -8,10 +8,32 @@ const { ensureIgImage, ensureJpeg, ensureStoryImage, compositeVideoStory, probeM
 // Endpoint shapes used here are unchanged across these versions.
 const GRAPH = 'https://graph.facebook.com/v22.0';
 
+// Every Graph call goes through this wrapper so a stalled socket can never wedge
+// a post in "posting" forever (axios has no default timeout). 60s comfortably
+// covers a single Graph request; long operations (video processing) poll instead.
+// It delegates to axios.* (rather than axios.create) so the default timeout is
+// applied without changing how callers/tests observe the underlying calls.
+const REQUEST_TIMEOUT_MS = 60000;
+const http = {
+  get: (url, config = {}) => axios.get(url, { timeout: REQUEST_TIMEOUT_MS, ...config }),
+  post: (url, data, config = {}) => axios.post(url, data, { timeout: REQUEST_TIMEOUT_MS, ...config }),
+  delete: (url, config = {}) => axios.delete(url, { timeout: REQUEST_TIMEOUT_MS, ...config }),
+};
+
 // Graph requires an appsecret_proof (HMAC of the token with the app secret) on
 // server-side calls when the app has "Require App Secret" enabled.
 function appSecretProof(accessToken, appSecret) {
   return crypto.createHmac('sha256', appSecret).update(accessToken).digest('hex');
+}
+
+// Add appsecret_proof to a params object when an app secret is available, keyed
+// to the access_token in those same params. A no-op without a secret/token, so
+// publishing still works when "Require App Secret" is off (the default).
+function withProof(params, appSecret) {
+  if (appSecret && params && params.access_token) {
+    return { ...params, appsecret_proof: appSecretProof(params.access_token, appSecret) };
+  }
+  return params;
 }
 
 function formatPlaceAddress(loc = {}) {
@@ -40,7 +62,7 @@ function graphErrorMessage(err) {
 // returns Facebook Place Pages whose IDs work as both the Instagram location_id
 // and the Facebook `place` tag.
 async function searchPlaces(query, accessToken, appSecret) {
-  const { data } = await axios.get(`${GRAPH}/pages/search`, {
+  const { data } = await http.get(`${GRAPH}/pages/search`, {
     params: {
       q: query,
       fields: 'id,name,location,link',
@@ -57,8 +79,23 @@ async function searchPlaces(query, accessToken, appSecret) {
   return places;
 }
 
-async function publishPost(post, tokens, appCreds, serverUrl) {
-  const results = { instagramResult: null, facebookResult: null };
+async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
+  // Persist each platform's result the moment it's known (best-effort), so a
+  // crash or DB hiccup AFTER a platform published doesn't cause a republish on
+  // retry — `onResult(platform, result)` is supplied by the worker.
+  const onResult = typeof opts.onResult === 'function' ? opts.onResult : null;
+  // Decrypt the app secret once for appsecret_proof. Null when not configured
+  // (or in tests), in which case proofs are simply omitted.
+  const appSecret = appCreds && appCreds.metaAppSecret ? decrypt(appCreds.metaAppSecret) : null;
+
+  // Carry forward any results from a previous attempt so we can skip a platform
+  // that already published (idempotent retry — prevents duplicate live posts).
+  const results = {
+    instagramResult: post.instagramResult || null,
+    facebookResult: post.facebookResult || null,
+  };
+  const igDone = !!(post.instagramResult && post.instagramResult.feed && post.instagramResult.feed.mediaId && !post.instagramResult.error);
+  const fbDone = !!(post.facebookResult && post.facebookResult.feed && post.facebookResult.feed.postId && !post.facebookResult.error);
 
   const igToken = tokens.find(t => t.platform === 'instagram');
   const fbToken = tokens.find(t => t.platform === 'facebook');
@@ -66,8 +103,8 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
   // Resolve the connected IG identity once — used both for the rendered story
   // card and for the @mention user_tag.
   let igProfile = null;
-  if (igToken && igToken.instagramAccountId) {
-    igProfile = await getIgProfile(igToken.instagramAccountId, readToken(igToken.accessToken)).catch(() => null);
+  if (igToken && igToken.instagramAccountId && !igDone) {
+    igProfile = await getIgProfile(igToken.instagramAccountId, readToken(igToken.accessToken), appSecret).catch(() => null);
   }
 
   const isVideoPost = post.mediaType === 'video';
@@ -115,8 +152,8 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     }
   }
 
-  const igStory = igToken && igToken.instagramAccountId ? await buildStory(post.storyLayout, { withMention: true }) : null;
-  const fbStory = fbToken && fbToken.pageId ? await buildStory(post.storyLayoutFb, { withMention: false }) : null;
+  const igStory = igToken && igToken.instagramAccountId && !igDone ? await buildStory(post.storyLayout, { withMention: true }) : null;
+  const fbStory = fbToken && fbToken.pageId && !fbDone ? await buildStory(post.storyLayoutFb, { withMention: false }) : null;
 
   // Feed posts carry the optional link in the caption text (Meta has no separate
   // link field). Story creatives are rendered from the ORIGINAL caption above, so
@@ -124,11 +161,12 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
-  if (igToken && igToken.instagramAccountId) {
+  if (igToken && igToken.instagramAccountId && !igDone) {
     try {
       results.instagramResult = await publishToInstagram({
         igUserId: igToken.instagramAccountId,
         accessToken: readToken(igToken.accessToken),
+        appSecret,
         post: feedPost,
         serverUrl,
         story: igStory,
@@ -137,13 +175,15 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     } catch (err) {
       results.instagramResult = { error: err.response?.data || err.message };
     }
+    if (onResult) await onResult('instagram', results.instagramResult);
   }
 
-  if (fbToken && fbToken.pageId) {
+  if (fbToken && fbToken.pageId && !fbDone) {
     try {
       results.facebookResult = await publishToFacebook({
         pageId: fbToken.pageId,
         accessToken: readToken(fbToken.accessToken),
+        appSecret,
         post: feedPost,
         serverUrl,
         story: fbStory,
@@ -151,22 +191,23 @@ async function publishPost(post, tokens, appCreds, serverUrl) {
     } catch (err) {
       results.facebookResult = { error: err.response?.data || err.message };
     }
+    if (onResult) await onResult('facebook', results.facebookResult);
   }
 
   return results;
 }
 
-async function publishToInstagram({ igUserId, accessToken, post, serverUrl, story, igProfile }) {
+async function publishToInstagram({ igUserId, accessToken, appSecret, post, serverUrl, story, igProfile }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId, thumbOffset } = post;
   const feedResult = await publishIgFeed({
-    igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
+    igUserId, accessToken, appSecret, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
   });
 
   let storyResult = null;
   if (postToStory && story) {
     try {
       storyResult = await publishIgStory({
-        igUserId, accessToken, story, serverUrl, username: igProfile?.username || null,
+        igUserId, accessToken, appSecret, story, serverUrl, username: igProfile?.username || null,
       });
     } catch (err) {
       storyResult = { error: err.response?.data || err.message };
@@ -176,7 +217,7 @@ async function publishToInstagram({ igUserId, accessToken, post, serverUrl, stor
   return { feed: feedResult, story: storyResult };
 }
 
-async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset }) {
+async function publishIgFeed({ igUserId, accessToken, appSecret, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset }) {
   let creationId;
 
   if (mediaType === 'carousel') {
@@ -185,11 +226,11 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     const igUrls = await Promise.all(mediaUrls.map(ensureIgImage));
     const childIds = await Promise.all(
       igUrls.map(url =>
-        axios.post(`${GRAPH}/${igUserId}/media`, {
+        http.post(`${GRAPH}/${igUserId}/media`, withProof({
           image_url: `${serverUrl}${url}`,
           is_carousel_item: true,
           access_token: accessToken,
-        }).then(r => r.data.id)
+        }, appSecret)).then(r => r.data.id)
       )
     );
 
@@ -201,11 +242,11 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     };
     if (locationId) params.location_id = locationId;
 
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
+    const { data } = await http.post(`${GRAPH}/${igUserId}/media`, withProof(params, appSecret));
     creationId = data.id;
     // Wait for the container to finish before publishing — without this a
     // not-yet-ready container can fail or publish empty.
-    await waitForContainer(creationId, accessToken);
+    await waitForContainer(creationId, accessToken, appSecret);
   } else if (mediaType === 'video') {
     const params = {
       media_type: 'REELS',
@@ -216,9 +257,9 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     if (locationId) params.location_id = locationId;
     if (thumbOffset != null) params.thumb_offset = thumbOffset;
 
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
+    const { data } = await http.post(`${GRAPH}/${igUserId}/media`, withProof(params, appSecret));
     creationId = data.id;
-    await waitForContainer(creationId, accessToken);
+    await waitForContainer(creationId, accessToken, appSecret);
   } else {
     // Guarantee a JPEG within IG's allowed aspect range; non-JPEG/odd-aspect
     // images are the reason single photos never showed up on Instagram.
@@ -230,21 +271,21 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
     };
     if (locationId) params.location_id = locationId;
 
-    const { data } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
+    const { data } = await http.post(`${GRAPH}/${igUserId}/media`, withProof(params, appSecret));
     creationId = data.id;
-    await waitForContainer(creationId, accessToken);
+    await waitForContainer(creationId, accessToken, appSecret);
   }
 
-  const { data } = await axios.post(`${GRAPH}/${igUserId}/media_publish`, {
+  const { data } = await http.post(`${GRAPH}/${igUserId}/media_publish`, withProof({
     creation_id: creationId,
     access_token: accessToken,
-  });
+  }, appSecret));
 
   // Capture the public permalink so the dashboard can link to the live post
   let permalink = null;
   try {
-    const { data: info } = await axios.get(`${GRAPH}/${data.id}`, {
-      params: { fields: 'permalink', access_token: accessToken },
+    const { data: info } = await http.get(`${GRAPH}/${data.id}`, {
+      params: withProof({ fields: 'permalink', access_token: accessToken }, appSecret),
     });
     permalink = info.permalink || null;
   } catch (_) { /* permalink is best-effort */ }
@@ -252,7 +293,7 @@ async function publishIgFeed({ igUserId, accessToken, mediaType, mediaUrls, capt
   return { mediaId: data.id, creationId, permalink };
 }
 
-async function publishIgStory({ igUserId, accessToken, story, serverUrl, username }) {
+async function publishIgStory({ igUserId, accessToken, appSecret, story, serverUrl, username }) {
   const isVideo = !!story.video;
   // Stories require media_type=STORIES. Image stories must be JPEG (the rendered
   // card is a PNG), so convert best-effort or the story silently fails to appear.
@@ -266,27 +307,38 @@ async function publishIgStory({ igUserId, accessToken, story, serverUrl, usernam
 
   // A self-mention is the only interactive element Graph exposes on stories
   // (user_tags, added 2025-07-09) — link stickers are not available via the API.
-  // Place it at the editor's mention coords when present, else bottom-center.
+  // Honor the editor's intent:
+  //   • mention element present → tag at its coords (story.mention = {x,y})
+  //   • mention element removed from a custom layout → story.mention === null,
+  //     so add NO tag (the user explicitly deleted it)
+  //   • no custom layout at all → no `mention` key, so keep the default
+  //     bottom-center self-tag (plain reshare behaviour)
   if (username) {
-    const at = story.mention || { x: 0.5, y: 0.92 };
-    params.user_tags = [{ username, x: at.x, y: at.y }];
+    if (story.mention) {
+      params.user_tags = [{ username, x: story.mention.x, y: story.mention.y }];
+    } else if (!('mention' in story)) {
+      params.user_tags = [{ username, x: 0.5, y: 0.92 }];
+    }
   }
 
-  const { data: container } = await axios.post(`${GRAPH}/${igUserId}/media`, params);
-  if (isVideo) await waitForContainer(container.id, accessToken);
-  const { data } = await axios.post(`${GRAPH}/${igUserId}/media_publish`, {
+  const { data: container } = await http.post(`${GRAPH}/${igUserId}/media`, withProof(params, appSecret));
+  // Wait for the container to finish for images too, not just video: Meta has to
+  // download image_url from our server, and publishing a not-yet-ready container
+  // can fail or post an empty story.
+  await waitForContainer(container.id, accessToken, appSecret);
+  const { data } = await http.post(`${GRAPH}/${igUserId}/media_publish`, withProof({
     creation_id: container.id,
     access_token: accessToken,
-  });
+  }, appSecret));
   return { mediaId: data.id };
 }
 
 // Look up the connected account's username, display name, and avatar — used for
 // the rendered story card and the @mention. Best-effort.
-async function getIgProfile(igUserId, accessToken) {
+async function getIgProfile(igUserId, accessToken, appSecret) {
   try {
-    const { data } = await axios.get(`${GRAPH}/${igUserId}`, {
-      params: { fields: 'username,name,profile_picture_url', access_token: accessToken },
+    const { data } = await http.get(`${GRAPH}/${igUserId}`, {
+      params: withProof({ fields: 'username,name,profile_picture_url', access_token: accessToken }, appSecret),
     });
     return { username: data.username || null, name: data.name || null, avatarUrl: data.profile_picture_url || null };
   } catch (_) {
@@ -294,10 +346,15 @@ async function getIgProfile(igUserId, accessToken) {
   }
 }
 
-async function publishToFacebook({ pageId, accessToken, post, serverUrl, story }) {
+async function publishToFacebook({ pageId, accessToken, appSecret, post, serverUrl, story }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId } = post;
   let feedResult;
 
+  // Every branch returns its FB object id under `postId` (a Page video, photo,
+  // and feed post are all deletable via DELETE /{id}). Keeping one canonical key
+  // is what lets unpost actually delete the post — earlier the video/single-photo
+  // branches used videoId/photoId, which the unpost path never checked, so those
+  // posts were never removed.
   if (mediaType === 'video') {
     const params = {
       file_url: `${serverUrl}${mediaUrls[0]}`,
@@ -306,58 +363,58 @@ async function publishToFacebook({ pageId, accessToken, post, serverUrl, story }
     };
     if (locationId) params.place = locationId;
 
-    const { data } = await axios.post(`${GRAPH}/${pageId}/videos`, params);
-    feedResult = { videoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
-    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+    const { data } = await http.post(`${GRAPH}/${pageId}/videos`, withProof(params, appSecret));
+    feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
+    if (data.id) await likeFbPost(data.id, accessToken, appSecret).catch(() => {});
   } else if (mediaUrls.length > 1) {
     const photoIds = await Promise.all(
       mediaUrls.map(url =>
-        axios.post(`${GRAPH}/${pageId}/photos`, {
+        http.post(`${GRAPH}/${pageId}/photos`, withProof({
           url: `${serverUrl}${url}`,
           published: false,
           access_token: accessToken,
-        }).then(r => ({ media_fbid: r.data.id }))
+        }, appSecret)).then(r => ({ media_fbid: r.data.id }))
       )
     );
 
     const params = { message: caption, attached_media: photoIds, access_token: accessToken };
     if (locationId) params.place = locationId;
 
-    const { data } = await axios.post(`${GRAPH}/${pageId}/feed`, params);
+    const { data } = await http.post(`${GRAPH}/${pageId}/feed`, withProof(params, appSecret));
     feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
-    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+    if (data.id) await likeFbPost(data.id, accessToken, appSecret).catch(() => {});
   } else {
     const params = { url: `${serverUrl}${mediaUrls[0]}`, message: caption, access_token: accessToken };
     if (locationId) params.place = locationId;
 
-    const { data } = await axios.post(`${GRAPH}/${pageId}/photos`, params);
-    feedResult = { photoId: data.id, permalink: `https://www.facebook.com/${data.id}` };
-    if (data.id) await likeFbPost(data.id, accessToken).catch(() => {});
+    const { data } = await http.post(`${GRAPH}/${pageId}/photos`, withProof(params, appSecret));
+    feedResult = { postId: data.id, permalink: `https://www.facebook.com/${data.id}` };
+    if (data.id) await likeFbPost(data.id, accessToken, appSecret).catch(() => {});
   }
 
   // Share to the Facebook story using FACEBOOK's own creative (item #7) — the
   // FB story is built from post.storyLayoutFb upstream, never from IG's layout.
   let storyResult = null;
   if (postToStory && story) {
-    storyResult = await publishFbStory({ pageId, accessToken, story, serverUrl });
+    storyResult = await publishFbStory({ pageId, accessToken, appSecret, story, serverUrl });
   }
 
   return storyResult ? { feed: feedResult, story: storyResult } : { feed: feedResult };
 }
 
-async function publishFbStory({ pageId, accessToken, story, serverUrl }) {
+async function publishFbStory({ pageId, accessToken, appSecret, story, serverUrl }) {
   try {
     if (story.video) {
       // Facebook video stories require a 3-phase upload: start → upload the
       // hosted file → finish. A single finish call with file_url does nothing.
-      const { data: start } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
+      const { data: start } = await http.post(`${GRAPH}/${pageId}/video_stories`, withProof({
         upload_phase: 'start',
         access_token: accessToken,
-      });
+      }, appSecret));
       const videoId = start.video_id;
 
       // Phase 2: hand Meta the public URL to fetch (resumable upload endpoint).
-      await axios.post(start.upload_url, null, {
+      await http.post(start.upload_url, null, {
         headers: {
           Authorization: `OAuth ${accessToken}`,
           file_url: `${serverUrl}${story.video}`,
@@ -365,40 +422,40 @@ async function publishFbStory({ pageId, accessToken, story, serverUrl }) {
       });
 
       // Wait for Meta to finish downloading/processing before publishing.
-      await waitForFbVideoStory(videoId, accessToken);
+      await waitForFbVideoStory(videoId, accessToken, appSecret);
 
-      const { data } = await axios.post(`${GRAPH}/${pageId}/video_stories`, {
+      const { data } = await http.post(`${GRAPH}/${pageId}/video_stories`, withProof({
         upload_phase: 'finish',
         video_id: videoId,
         access_token: accessToken,
-      });
+      }, appSecret));
       return { storyId: data.post_id || videoId };
     }
 
     // Photo story: upload unpublished, then share to story.
-    const { data: photo } = await axios.post(`${GRAPH}/${pageId}/photos`, {
+    const { data: photo } = await http.post(`${GRAPH}/${pageId}/photos`, withProof({
       url: `${serverUrl}${story.image}`,
       published: false,
       access_token: accessToken,
-    });
-    const { data } = await axios.post(`${GRAPH}/${pageId}/photo_stories`, {
+    }, appSecret));
+    const { data } = await http.post(`${GRAPH}/${pageId}/photo_stories`, withProof({
       photo_id: photo.id,
       access_token: accessToken,
-    });
+    }, appSecret));
     return { storyId: data.post_id || data.id };
   } catch (err) {
     return { error: err.response?.data || err.message };
   }
 }
 
-async function likeFbPost(postId, accessToken) {
-  await axios.post(`${GRAPH}/${postId}/likes`, { access_token: accessToken });
+async function likeFbPost(postId, accessToken, appSecret) {
+  await http.post(`${GRAPH}/${postId}/likes`, withProof({ access_token: accessToken }, appSecret));
 }
 
-async function waitForContainer(containerId, accessToken, maxAttempts = 15) {
+async function waitForContainer(containerId, accessToken, appSecret, maxAttempts = 15) {
   for (let i = 0; i < maxAttempts; i++) {
-    const { data } = await axios.get(`${GRAPH}/${containerId}`, {
-      params: { fields: 'status_code', access_token: accessToken },
+    const { data } = await http.get(`${GRAPH}/${containerId}`, {
+      params: withProof({ fields: 'status_code', access_token: accessToken }, appSecret),
     });
     if (data.status_code === 'FINISHED') return;
     if (data.status_code === 'ERROR') throw new Error('Media container processing failed');
@@ -409,10 +466,10 @@ async function waitForContainer(containerId, accessToken, maxAttempts = 15) {
 
 // Poll a Facebook video-story upload until Meta has fetched and processed the
 // file, so the finish phase doesn't publish an empty/half-uploaded story.
-async function waitForFbVideoStory(videoId, accessToken, maxAttempts = 20) {
+async function waitForFbVideoStory(videoId, accessToken, appSecret, maxAttempts = 20) {
   for (let i = 0; i < maxAttempts; i++) {
-    const { data } = await axios.get(`${GRAPH}/${videoId}`, {
-      params: { fields: 'status', access_token: accessToken },
+    const { data } = await http.get(`${GRAPH}/${videoId}`, {
+      params: withProof({ fields: 'status', access_token: accessToken }, appSecret),
     });
     const uploading = data.status?.uploading_phase?.status;
     const processing = data.status?.processing_phase?.status;
@@ -426,7 +483,7 @@ async function waitForFbVideoStory(videoId, accessToken, maxAttempts = 20) {
 }
 
 async function getLongLivedToken(shortToken, appId, appSecret) {
-  const { data } = await axios.get(`${GRAPH}/oauth/access_token`, {
+  const { data } = await http.get(`${GRAPH}/oauth/access_token`, {
     params: {
       grant_type: 'fb_exchange_token',
       client_id: appId,
@@ -438,18 +495,26 @@ async function getLongLivedToken(shortToken, appId, appSecret) {
 }
 
 async function getPagesAndIgAccounts(userToken) {
-  const { data } = await axios.get(`${GRAPH}/me/accounts`, {
-    params: { access_token: userToken, fields: 'id,name,access_token,instagram_business_account' },
-  });
-  return data.data || [];
+  // Follow pagination — /me/accounts returns 25 Pages per page by default, so an
+  // agency user managing more than 25 Pages would otherwise never see the rest.
+  const pages = [];
+  let url = `${GRAPH}/me/accounts`;
+  let params = { access_token: userToken, fields: 'id,name,access_token,instagram_business_account', limit: 100 };
+  for (let i = 0; i < 50 && url; i++) { // hard cap at 50 pages (5000 Pages) as a runaway guard
+    const { data } = await http.get(url, { params });
+    if (Array.isArray(data.data)) pages.push(...data.data);
+    url = data.paging && data.paging.next ? data.paging.next : null;
+    params = undefined; // the `next` URL already carries all query params
+  }
+  return pages;
 }
 
 async function deleteIgPost(mediaId, accessToken) {
-  await axios.delete(`${GRAPH}/${mediaId}`, { params: { access_token: accessToken } });
+  await http.delete(`${GRAPH}/${mediaId}`, { params: { access_token: accessToken } });
 }
 
 async function deleteFbPost(postId, accessToken) {
-  await axios.delete(`${GRAPH}/${postId}`, { params: { access_token: accessToken } });
+  await http.delete(`${GRAPH}/${postId}`, { params: { access_token: accessToken } });
 }
 
 module.exports = {

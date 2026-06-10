@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, RefreshCw, Pencil, Trash2 } from 'lucide-react';
 import api from '../api';
@@ -14,14 +14,18 @@ export default function ClientProfile() {
   const [showEdit, setShowEdit] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Drop stale results when the client id changes mid-flight (see CampaignView).
+  const reqId = useRef(0);
   const load = useCallback(() => {
+    const my = ++reqId.current;
     Promise.all([
       api.get(`/clients/${id}`),
       api.get(`/clients/${id}/campaigns`),
     ]).then(([clientRes, campaignRes]) => {
+      if (my !== reqId.current) return;
       setClient(clientRes.data);
       setCampaigns(campaignRes.data);
-    }).catch(console.error).finally(() => setLoading(false));
+    }).catch(console.error).finally(() => { if (my === reqId.current) setLoading(false); });
   }, [id]);
 
   useEffect(() => { load(); }, [load]);

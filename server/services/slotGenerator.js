@@ -13,15 +13,23 @@ function localTimeToUtc(year, month, day, hours, minutes, tz, seconds = 0, ms = 
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
-    const parts = fmt.formatToParts(naive);
-    const map = {};
-    for (const p of parts) if (p.type !== 'literal') map[p.type] = p.value;
-    const tzAsUtc = Date.UTC(
-      Number(map.year), Number(map.month) - 1, Number(map.day),
-      Number(map.hour), Number(map.minute), Number(map.second)
-    );
-    const offsetMs = tzAsUtc - naive.getTime();
-    return new Date(naive.getTime() - offsetMs);
+    // Offset (tz wall-clock minus UTC) at a given UTC instant.
+    const offsetAt = (utcMs) => {
+      const map = {};
+      for (const p of fmt.formatToParts(new Date(utcMs))) if (p.type !== 'literal') map[p.type] = p.value;
+      const tzAsUtc = Date.UTC(
+        Number(map.year), Number(map.month) - 1, Number(map.day),
+        Number(map.hour), Number(map.minute), Number(map.second)
+      );
+      return tzAsUtc - utcMs;
+    };
+    // The offset must be taken at the RESULT instant, not the naive one — they
+    // differ across a DST transition. One refinement pass converges for the
+    // standard ±1h shift (e.g. a 6am slot on the spring-forward day no longer
+    // lands an hour late).
+    let utc = naive.getTime() - offsetAt(naive.getTime());
+    utc = naive.getTime() - offsetAt(utc);
+    return new Date(utc);
   } catch (_) {
     return naive;
   }
@@ -34,9 +42,15 @@ function todayInTz(now, tz) {
   if (!tz || tz === 'UTC') {
     return { y: now.getUTCFullYear(), m: now.getUTCMonth() + 1, d: now.getUTCDate() };
   }
-  const iso = now.toLocaleDateString('en-CA', { timeZone: tz });
-  const [y, m, d] = iso.split('-').map(Number);
-  return { y, m, d };
+  try {
+    const iso = now.toLocaleDateString('en-CA', { timeZone: tz });
+    const [y, m, d] = iso.split('-').map(Number);
+    return { y, m, d };
+  } catch (_) {
+    // Invalid IANA zone — fall back to UTC instead of throwing (which would 500
+    // every campaign create/edit for a user with a bad saved timezone).
+    return { y: now.getUTCFullYear(), m: now.getUTCMonth() + 1, d: now.getUTCDate() };
+  }
 }
 
 function addDays(y, m, d, addD) {
@@ -129,7 +143,12 @@ function endOfDayInTz(dateInput, tz) {
   } else {
     const parsed = new Date(dateInput);
     if (isNaN(parsed.getTime())) return null;
-    const iso = parsed.toLocaleDateString('en-CA', { timeZone: tz || 'UTC' });
+    let iso;
+    try {
+      iso = parsed.toLocaleDateString('en-CA', { timeZone: tz || 'UTC' });
+    } catch (_) {
+      iso = parsed.toLocaleDateString('en-CA', { timeZone: 'UTC' }); // invalid zone → UTC
+    }
     [y, m, d] = iso.split('-').map(Number);
   }
   return localTimeToUtc(y, m, d, 23, 59, tz, 59, 999);

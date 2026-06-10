@@ -24,4 +24,24 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// If a request comes back 401 with a token in hand, the session has expired or
+// been invalidated. Clear it and bounce to /login instead of surfacing a generic
+// "Failed to save" alert on every subsequent action. Login/register 401s (bad
+// credentials) are left alone so their own error messages still show.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status;
+    const url = error.config?.url || '';
+    const isAuthEndpoint = url.includes('/auth/login') || url.includes('/auth/register');
+    if (status === 401 && getToken() && !isAuthEndpoint) {
+      setToken(null);
+      if (window.location.pathname !== '/login') {
+        window.location.assign('/login');
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default api;

@@ -27,13 +27,16 @@ function runUpload(middleware) {
 const logoDir = path.join(__dirname, '../uploads/logos');
 fs.mkdirSync(logoDir, { recursive: true });
 
+// SVG is intentionally excluded: logos are served from /uploads on the app's own
+// origin with no sanitization, so an SVG with an embedded <script> would run as
+// stored XSS when opened directly. Post media and story assets already exclude
+// SVG for the same reason.
 const LOGO_EXTENSIONS = {
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
   'image/png': '.png',
   'image/gif': '.gif',
   'image/webp': '.webp',
-  'image/svg+xml': '.svg',
 };
 
 const logoStorage = multer.diskStorage({
@@ -48,7 +51,7 @@ const uploadLogo = multer({
   limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (LOGO_EXTENSIONS[file.mimetype]) return cb(null, true);
-    cb(new Error(`Unsupported file type: ${file.mimetype}. Use JPG, PNG, GIF, WebP, or SVG.`));
+    cb(new Error(`Unsupported file type: ${file.mimetype}. Use JPG, PNG, GIF, or WebP.`));
   },
 });
 
@@ -237,8 +240,11 @@ router.get('/:id/campaigns', auth, async (req, res) => {
       where: { clientId: req.params.id },
       include: {
         _count: { select: { scheduledPosts: true } },
+        // "Slots have media" should reflect slots that actually have media,
+        // regardless of status — filtering by status:'uploaded' made the bar
+        // regress to zero as posts moved to 'posted'.
         scheduledPosts: {
-          where: { status: 'uploaded' },
+          where: { mediaUrls: { isEmpty: false } },
           select: { id: true },
         },
       },

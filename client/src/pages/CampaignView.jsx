@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pause, Play, Trash2, Pencil, AlertTriangle, Check, X } from 'lucide-react';
 import api from '../api';
@@ -17,14 +17,20 @@ export default function CampaignView() {
   const [endDraft, setEndDraft] = useState('');
   const [savingEnd, setSavingEnd] = useState(false);
 
+  // Guards against a fetch race: switching campaigns quickly could let an older
+  // request resolve after the newer one and render the wrong campaign's data
+  // under the new URL. Each load takes a ticket; stale results are dropped.
+  const reqId = useRef(0);
   const load = useCallback(() => {
+    const my = ++reqId.current;
     Promise.all([
       api.get(`/campaigns/${id}`),
       api.get(`/posts/campaign/${id}`),
     ]).then(([campRes, postsRes]) => {
+      if (my !== reqId.current) return;
       setCampaign(campRes.data);
       setPosts(postsRes.data);
-    }).catch(console.error).finally(() => setLoading(false));
+    }).catch(console.error).finally(() => { if (my === reqId.current) setLoading(false); });
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
@@ -35,7 +41,10 @@ export default function CampaignView() {
   };
 
   const startEditEnd = () => {
-    setEndDraft(campaign.endDate ? campaign.endDate.slice(0, 10) : '');
+    // Pre-fill from the LOCAL calendar date, matching what formatEndDate shows.
+    // Slicing the UTC ISO string instead lands a day ahead for western zones
+    // (end-of-day is stored in the user's tz), so each save crept the end +1 day.
+    setEndDraft(campaign.endDate ? toLocalDateValue(campaign.endDate) : '');
     setEditingEnd(true);
   };
 
@@ -163,6 +172,14 @@ function formatEndDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// "YYYY-MM-DD" for a stored timestamp in the viewer's LOCAL time — so the date
+// input pre-fills the same day the label displays.
+function toLocalDateValue(iso) {
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function describeSchedule(campaign) {

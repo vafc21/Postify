@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const prisma = require('../utils/prisma');
 const { publishPost } = require('./meta');
@@ -5,6 +7,9 @@ const { generateSlots } = require('./slotGenerator');
 
 const POLL_INTERVAL_MS = 60 * 1000;
 const MAX_PUBLISH_ATTEMPTS = 3;
+// How long a post may sit in "posting" with no progress before it's considered
+// orphaned and requeued. Generous enough to never interrupt a healthy publish.
+const STUCK_GRACE_MS = 10 * 60 * 1000;
 
 // Posts publish at their exact scheduled time by default. Quiet hours are
 // opt-in: set POSTING_WINDOW_START and POSTING_WINDOW_END (24h, e.g. 8 and 20)
@@ -46,6 +51,10 @@ async function sendWebhook(webhookUrl, event, post, client, extra = {}) {
 }
 
 async function processPost(post) {
+  // Tracks whatever publishPost returned, so the catch block below can tell a
+  // post-publish failure (don't wipe the live-post IDs / don't republish) from a
+  // pre-publish one.
+  let lastResults = null;
   try {
     const claimed = await prisma.scheduledPost.updateMany({
       where: { id: post.id, status: 'uploaded' },
@@ -71,7 +80,23 @@ async function processPost(post) {
     }
 
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
-    const { instagramResult, facebookResult } = await publishPost(post, tokens, user, serverUrl);
+    const { instagramResult, facebookResult } = await publishPost(post, tokens, user, serverUrl, {
+      // Persist each platform's result the instant it's known. If the process
+      // dies (or the final status write below fails) AFTER a platform went live,
+      // the saved result lets the retry skip that platform instead of posting a
+      // duplicate.
+      onResult: async (platform, result) => {
+        try {
+          await prisma.scheduledPost.update({
+            where: { id: post.id },
+            data: platform === 'instagram'
+              ? { instagramResult: result || undefined }
+              : { facebookResult: result || undefined },
+          });
+        } catch (_) { /* best-effort — the final update is the source of truth */ }
+      },
+    });
+    lastResults = { instagramResult, facebookResult };
 
     // A platform "succeeded" only if it was attempted and its feed post went through.
     const igOk = !!(instagramResult && !instagramResult.error && instagramResult.feed && !instagramResult.feed.error);
@@ -115,13 +140,19 @@ async function processPost(post) {
     console.error(`Worker: failed to post ${post.id}:`, err.message);
     const nextAttempts = (post.attempts || 0) + 1;
     const giveUp = nextAttempts >= MAX_PUBLISH_ATTEMPTS;
+    // Never overwrite a platform result that already went live (it was persisted
+    // incrementally, or is on the incoming record) — clobbering it with an error
+    // would both hide the live post and let the retry republish it.
+    const hadSuccess =
+      lastResults?.instagramResult?.feed?.mediaId ||
+      lastResults?.facebookResult?.feed?.postId ||
+      post.instagramResult?.feed?.mediaId ||
+      post.facebookResult?.feed?.postId;
+    const data = { status: giveUp ? 'failed' : 'uploaded', attempts: nextAttempts };
+    if (!hadSuccess) data.instagramResult = { error: err.message, attempt: nextAttempts };
     const failed = await prisma.scheduledPost.update({
       where: { id: post.id },
-      data: {
-        status: giveUp ? 'failed' : 'uploaded',
-        attempts: nextAttempts,
-        instagramResult: { error: err.message, attempt: nextAttempts },
-      },
+      data,
     }).catch(() => null);
 
     if (giveUp && failed) {
@@ -188,18 +219,49 @@ async function topUpSlots() {
 }
 
 async function recoverStuckPosts() {
-  // Anything left in "posting" after a restart didn't actually publish — return
-  // it to "uploaded" so the next tick retries instead of marking it dead.
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  // A post left in "posting" with no recent progress is orphaned — e.g. a
+  // crash/redeploy mid-publish. Requeue it so it retries. This runs EVERY tick
+  // (not just at startup), because a transient stall mid-session would otherwise
+  // strand the post in "posting" forever. The grace window must exceed the
+  // longest healthy publish (IG video wait + FB video story + composite ≈ a few
+  // minutes); since processPost persists each platform result as it lands,
+  // `updatedAt` keeps advancing for a post that's genuinely making progress, so
+  // a 10-minute idle window only ever catches truly stuck posts. Requeuing is
+  // safe even if a platform already published — publishPost skips done platforms.
+  const cutoff = new Date(Date.now() - STUCK_GRACE_MS);
   const stuck = await prisma.scheduledPost.updateMany({
     where: {
       status: 'posting',
-      updatedAt: { lt: fiveMinutesAgo },
+      updatedAt: { lt: cutoff },
     },
     data: { status: 'uploaded' },
   });
   if (stuck.count > 0) {
-    console.log(`Worker: recovered ${stuck.count} stuck post(s) from previous session — requeued`);
+    console.log(`Worker: recovered ${stuck.count} stuck post(s) — requeued`);
+  }
+}
+
+// Derived story files (rendered 9:16 PNGs and composited MP4s) accumulate in
+// uploads/stories with one set per publish attempt and are never referenced
+// again once Meta has fetched them during publishing. Prune ones older than 48h
+// so the directory doesn't grow without bound. The assets/ subdir holds
+// user-uploaded story backgrounds (referenced by saved layouts) and is skipped.
+function cleanupDerivedStories() {
+  const dir = path.join(__dirname, '..', 'uploads', 'stories');
+  const maxAgeMs = 48 * 60 * 60 * 1000;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (_) {
+    return; // directory not created yet — nothing to clean
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.isFile()) continue; // skip the assets/ subdir
+    const abs = path.join(dir, entry.name);
+    try {
+      if (now - fs.statSync(abs).mtimeMs > maxAgeMs) fs.unlinkSync(abs);
+    } catch (_) { /* best-effort */ }
   }
 }
 
@@ -207,14 +269,16 @@ function startWorker() {
   console.log('Worker: started, polling every 60s');
   const tick = async () => {
     try {
+      await recoverStuckPosts();
       await publishDuePosts();
       await topUpSlots();
+      cleanupDerivedStories();
     } catch (err) {
       console.error('Worker tick error:', err);
     }
   };
-  recoverStuckPosts().then(() => tick());
+  tick();
   return setInterval(tick, POLL_INTERVAL_MS);
 }
 
-module.exports = { startWorker, processPost, publishDuePosts, topUpSlots, recoverStuckPosts };
+module.exports = { startWorker, processPost, publishDuePosts, topUpSlots, recoverStuckPosts, cleanupDerivedStories };

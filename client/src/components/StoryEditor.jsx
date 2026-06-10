@@ -1,9 +1,17 @@
-import { useState, useRef, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Type, AtSign, Upload, RotateCw, Trash2, X } from 'lucide-react';
 import api from '../api';
 
-const SERVER = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+// Strip only a trailing "/api" (see MediaSlot) so a host like "api.example.com"
+// isn't mangled by replacing the first "/api".
+const SERVER = import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:5000';
 const CANVAS_W = 1080; // story design space; coords are stored normalized 0..1
+
+// Renderer clamps the post-photo box to this aspect window (server storyRenderer
+// uses the same range), so the preview must clamp identically to stay 1:1.
+const MIN_PHOTO_ASPECT = 0.6;
+const MAX_PHOTO_ASPECT = 1.25;
+const clampAspect = (a) => Math.max(MIN_PHOTO_ASPECT, Math.min(MAX_PHOTO_ASPECT, a));
 
 // Background presets — the gradient/color strings are passed verbatim to the
 // server renderer (Satori), so what you see here is what gets published.
@@ -44,9 +52,13 @@ function defaultLayoutFb() {
   };
 }
 
+// Deep clone so editing never mutates the object held in the parent's post
+// state (the editor tags elements with a transient _editing flag while typing).
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
 export default function StoryEditor({ post, displayName, onClose, onChange }) {
-  const initIg = post.storyLayout && Array.isArray(post.storyLayout.elements) ? post.storyLayout : defaultLayout();
-  const initFb = post.storyLayoutFb && Array.isArray(post.storyLayoutFb.elements) ? post.storyLayoutFb : defaultLayoutFb();
+  const initIg = post.storyLayout && Array.isArray(post.storyLayout.elements) ? clone(post.storyLayout) : defaultLayout();
+  const initFb = post.storyLayoutFb && Array.isArray(post.storyLayoutFb.elements) ? clone(post.storyLayoutFb) : defaultLayoutFb();
   // Instagram and Facebook stories are edited independently; `platform` selects
   // which one the canvas + controls currently act on. The background/elements
   // helpers below transparently read & write the active platform's layout, so
@@ -66,6 +78,10 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
 
   const canvasRef = useRef(null);
   const [canvas, setCanvas] = useState({ w: 1, h: 1 });
+  // Real aspect (h/w) of the post media, clamped to the renderer's window. The
+  // card photo box must use this, not a fixed 0.82, or the published card is a
+  // different height than the preview and overlaps surrounding elements.
+  const [mediaAspect, setMediaAspect] = useState(0.82);
   const fileRef = useRef();
   const interactionCleanup = useRef(null); // tears down an in-progress drag/rotate
 
@@ -87,6 +103,24 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   const scale = canvas.w / CANVAS_W; // px-per-design-unit
   const name = displayName || 'Your page';
   const photoUrl = post.mediaUrls?.[0] ? `${SERVER}${post.mediaUrls[0]}` : null;
+
+  // Measure the post media's intrinsic aspect so the card preview matches the
+  // server-rendered output. Falls back to 0.82 until loaded / on error.
+  useEffect(() => {
+    if (!photoUrl) return undefined;
+    let cancelled = false;
+    if (isVideo) {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.onloadedmetadata = () => { if (!cancelled && v.videoWidth) setMediaAspect(clampAspect(v.videoHeight / v.videoWidth)); };
+      v.src = photoUrl;
+    } else {
+      const img = new Image();
+      img.onload = () => { if (!cancelled && img.naturalWidth) setMediaAspect(clampAspect(img.naturalHeight / img.naturalWidth)); };
+      img.src = photoUrl;
+    }
+    return () => { cancelled = true; };
+  }, [photoUrl, isVideo]);
 
   // Not memoized on purpose: setElements closes over the active `platform`, so a
   // stale useCallback would edit the wrong platform's layout after switching tabs.
@@ -247,6 +281,7 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
                   name={name}
                   photoUrl={photoUrl}
                   isVideo={isVideo}
+                  mediaAspect={mediaAspect}
                   caption={post.caption}
                   carousel={post.mediaType === 'carousel'}
                   platform={platform}
@@ -290,7 +325,7 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
                 <button onClick={() => fileRef.current?.click()} title="Upload image" style={{ ...swatch, border: '2px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-3)' }}>
                   {uploading ? '…' : <Upload size={16} color="var(--text-muted)" />}
                 </button>
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => uploadBackground(e.target.files?.[0])} />
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { uploadBackground(e.target.files?.[0]); e.target.value = ''; }} />
                 {BACKGROUNDS.map((b) => {
                   const active = (b.bg.type === background.type) && (b.bg.value === background.value || (b.bg.type === 'auto'));
                   return (
@@ -314,7 +349,7 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
 
             <Section title="Selected element">
               {!selected && <div style={hintBox}>Click an element to edit it. Drag to move, drag the ⟳ handle to rotate. Double-click a text box to type.</div>}
-              {selected && <ElementControls el={selected} onChange={(patch) => updateEl(selected.id, patch)} onRemove={() => removeEl(selected.id)} />}
+              {selected && <ElementControls el={selected} isVideo={isVideo} onChange={(patch) => updateEl(selected.id, patch)} onRemove={() => removeEl(selected.id)} />}
             </Section>
 
             <button onClick={resetDefault} style={{ ...btn, width: '100%', marginTop: 'auto' }}>Reset to default</button>
@@ -330,12 +365,19 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   );
 }
 
-function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption, carousel, platform, onSelect, onDragStart, onRotateStart, onRemove, onText, setEditing }) {
+function EditableElement({ el, selected, scale, name, photoUrl, isVideo, mediaAspect, caption, carousel, platform, onSelect, onDragStart, onRotateStart, onRemove, onText, setEditing }) {
   const ref = useRef(null);
   const textRef = useRef(null);
 
   // Mention is Instagram-only; hide it in the Facebook preview.
   if (el.type === 'mention' && platform === 'facebook') return null;
+
+  // The post card can't be removed (there's no way to add it back) and, for
+  // video posts, can't be rotated — the server forces a video card's rotation to
+  // 0, so offering rotation here would make the preview diverge from the output.
+  const isPostCard = el.type === 'post';
+  const canRotate = !(isPostCard && isVideo);
+  const canRemove = !isPostCard;
 
   const wrap = {
     position: 'absolute',
@@ -351,14 +393,18 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
 
   const handles = selected && (
     <>
-      <div onPointerDown={(e) => onRotateStart(e, el, ref.current)}
-        style={{ position: 'absolute', top: -28, left: '50%', transform: 'translateX(-50%)', width: 20, height: 20, borderRadius: '50%', background: '#fff', color: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', boxShadow: '0 2px 6px rgba(0,0,0,.3)' }}>
-        <RotateCw size={11} />
-      </div>
-      <div onPointerDown={(e) => { e.stopPropagation(); onRemove(); }}
-        style={{ position: 'absolute', top: -12, right: -12, width: 20, height: 20, borderRadius: '50%', background: 'var(--danger)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid #fff' }}>
-        <X size={11} />
-      </div>
+      {canRotate && (
+        <div onPointerDown={(e) => onRotateStart(e, el, ref.current)}
+          style={{ position: 'absolute', top: -28, left: '50%', transform: 'translateX(-50%)', width: 20, height: 20, borderRadius: '50%', background: '#fff', color: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', boxShadow: '0 2px 6px rgba(0,0,0,.3)' }}>
+          <RotateCw size={11} />
+        </div>
+      )}
+      {canRemove && (
+        <div onPointerDown={(e) => { e.stopPropagation(); onRemove(); }}
+          style={{ position: 'absolute', top: -12, right: -12, width: 20, height: 20, borderRadius: '50%', background: 'var(--danger)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid #fff' }}>
+          <X size={11} />
+        </div>
+      )}
     </>
   );
 
@@ -366,6 +412,7 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
     // All inner dimensions are design-space px (matching server/storyRenderer.js)
     // multiplied by `scale`, so the preview is a true 1:1 mini of the output.
     const cardW = el.width * scale * CANVAS_W;
+    const photoAspect = mediaAspect || 0.82; // measured h/w of the post media (renderer-clamped)
     return (
       <div ref={ref} style={{ ...wrap, width: cardW }} onPointerDown={(e) => onDragStart(e, el)} onClick={onSelect}>
         {handles}
@@ -379,9 +426,9 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
           </div>
           {photoUrl
             ? (isVideo
-                ? <video src={photoUrl} autoPlay muted loop playsInline style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />
-                : <img src={photoUrl} alt="" style={{ width: '100%', height: cardW * 0.82, objectFit: 'cover', display: 'block' }} />)
-            : <div style={{ width: '100%', height: cardW * 0.82, background: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' }} />}
+                ? <video src={photoUrl} autoPlay muted loop playsInline style={{ width: '100%', height: cardW * photoAspect, objectFit: 'cover', display: 'block' }} />
+                : <img src={photoUrl} alt="" style={{ width: '100%', height: cardW * photoAspect, objectFit: 'cover', display: 'block' }} />)
+            : <div style={{ width: '100%', height: cardW * photoAspect, background: 'linear-gradient(150deg,#f8b259,#ef6f53 45%,#b5377e)' }} />}
           {caption && <div style={{ padding: `${16 * scale}px ${20 * scale}px`, fontSize: 24 * scale, color: '#1c1e21', lineHeight: 1.35 }}>{caption.slice(0, 90)}</div>}
         </div>
       </div>
@@ -403,13 +450,13 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
   // text
   return (
     <div ref={ref} style={wrap} onPointerDown={(e) => onDragStart(e, el)} onClick={onSelect}
-      onDoubleClick={() => { setEditing(true); el._editing = true; textRef.current?.focus(); }}>
+      onDoubleClick={() => { setEditing(true); textRef.current?.focus(); }}>
       {handles}
       <div
         ref={textRef}
         contentEditable
         suppressContentEditableWarning
-        onBlur={(e) => { setEditing(false); el._editing = false; onText(e.currentTarget.textContent); }}
+        onBlur={(e) => { setEditing(false); onText(e.currentTarget.textContent); }}
         style={{
           fontSize: (el.size || 56) * scale,
           fontWeight: el.bold === false ? 400 : 700,
@@ -417,7 +464,12 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
           textShadow: '0 2px 8px rgba(0,0,0,.45)',
           padding: '2px 6px',
           outline: 'none',
-          whiteSpace: 'nowrap',
+          // Wrap like the server renderer (maxWidth 86%, centered) instead of a
+          // single nowrap line, so long text previews at the right height/extent.
+          maxWidth: CANVAS_W * 0.86 * scale,
+          textAlign: el.align || 'center',
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
         }}>
         {el.text}
       </div>
@@ -425,7 +477,7 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, caption
   );
 }
 
-function ElementControls({ el, onChange, onRemove }) {
+function ElementControls({ el, isVideo, onChange, onRemove }) {
   if (el.type === 'post') {
     return (
       <>
@@ -433,7 +485,9 @@ function ElementControls({ el, onChange, onRemove }) {
         <Field label={`Size · ${Math.round((el.width || 0.72) * 100)}%`}>
           <input type="range" min="30" max="100" value={Math.round((el.width || 0.72) * 100)} onChange={(e) => onChange({ width: Number(e.target.value) / 100 })} style={{ width: '100%', accentColor: 'var(--primary)' }} />
         </Field>
-        <RotationField el={el} onChange={onChange} />
+        {/* Video cards are always published axis-aligned (server forces rotation
+            to 0), so the rotation control is omitted for them. */}
+        {!isVideo && <RotationField el={el} onChange={onChange} />}
       </>
     );
   }

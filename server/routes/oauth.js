@@ -49,7 +49,14 @@ router.get('/clients/:clientId/connect/:platform', auth, async (req, res) => {
 // GET /api/oauth/callback
 router.get('/callback', async (req, res) => {
   const { code, state, error: oauthError } = req.query;
-  const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+  // CLIENT_URL may list several allowed origins (comma-separated, mirrored by
+  // the CORS config in index.js). For a redirect we need ONE concrete origin —
+  // use the first — otherwise the whole comma-joined string becomes the URL base
+  // and the browser can't land on a real page.
+  const CLIENT_URL = (process.env.CLIENT_URL || 'http://localhost:5173')
+    .split(',')[0]
+    .trim()
+    .replace(/\/+$/, '');
 
   if (oauthError) {
     return res.redirect(`${CLIENT_URL}/oauth-result?error=${encodeURIComponent(oauthError)}`);

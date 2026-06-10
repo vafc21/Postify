@@ -1,7 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Upload, Play, Trash2, RefreshCw, RotateCcw, MapPin, ExternalLink, Pencil, Check, X, Link } from 'lucide-react';
 import api from '../api';
 import StoryEditor from './StoryEditor';
+
+// Strip only a trailing "/api" — replace('/api','') would corrupt a host like
+// "https://api.example.com/api" by removing the first "/api" in "//api...".
+const SERVER = import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:5000';
 
 function postLinks(post) {
   const links = [];
@@ -30,15 +34,17 @@ export default function MediaSlot({ post, onChange }) {
   const [showPlaceList, setShowPlaceList] = useState(false);
   const [placeError, setPlaceError] = useState('');
   const placeTimer = useRef();
-  const justSelectedPlace = useRef(false);
   const fileRef = useRef();
-  const SERVER = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+
+  // Cancel any pending place-search debounce if the slot unmounts.
+  useEffect(() => () => clearTimeout(placeTimer.current), []);
 
   const borderColor = {
     posted: 'var(--success)',
     posting: 'var(--primary)',
     uploaded: 'var(--primary)',
     failed: 'var(--danger)',
+    unposted: 'var(--warning)',
     pending: isUrgent(post) ? 'var(--danger)' : 'var(--warning)',
   }[post.status] || 'var(--border)';
 
@@ -109,7 +115,6 @@ export default function MediaSlot({ post, onChange }) {
   };
 
   const selectPlace = (place) => {
-    justSelectedPlace.current = true;
     setLocation(place.name);
     setLocationId(place.id);
     setPlaceResults([]);
@@ -118,11 +123,11 @@ export default function MediaSlot({ post, onChange }) {
   };
 
   const onLocationBlur = () => {
+    // The dropdown items use onMouseDown+preventDefault to keep focus, so no
+    // blur fires when a place is picked (selectPlace saves it directly). Any
+    // blur here is the user leaving the field after typing — save what's shown.
+    clearTimeout(placeTimer.current);
     setTimeout(() => setShowPlaceList(false), 150);
-    if (justSelectedPlace.current) {
-      justSelectedPlace.current = false;
-      return;
-    }
     saveField({ location, locationId });
   };
 
@@ -192,7 +197,7 @@ export default function MediaSlot({ post, onChange }) {
           </div>
         )}
         <input ref={fileRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }}
-          onChange={e => uploadFiles(e.target.files)} />
+          onChange={e => { uploadFiles(e.target.files); e.target.value = ''; }} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -230,7 +235,7 @@ export default function MediaSlot({ post, onChange }) {
             {hasMedia && post.status !== 'posted' && (
               <>
                 <ActionBtn icon={<Play size={11} />} onClick={() => setPreviewUrl(`${SERVER}${post.mediaUrls[0]}`)} title="Preview" />
-                <ActionBtn icon={<RefreshCw size={11} />} onClick={() => fileRef.current?.click()} title="Replace" />
+                <ActionBtn icon={<RefreshCw size={11} />} onClick={() => !loading && fileRef.current?.click()} title="Replace" disabled={loading} />
                 <ActionBtn icon={<Trash2 size={11} />} onClick={deleteMedia} title="Delete" danger />
               </>
             )}
@@ -247,7 +252,7 @@ export default function MediaSlot({ post, onChange }) {
               </>
             )}
             {!hasMedia && (
-              <button onClick={() => fileRef.current?.click()} style={{ ...actionBtnBase, background: 'var(--primary)', color: '#fff', fontWeight: 600 }}>
+              <button onClick={() => !loading && fileRef.current?.click()} disabled={loading} style={{ ...actionBtnBase, background: 'var(--primary)', color: '#fff', fontWeight: 600, opacity: loading ? 0.6 : 1 }}>
                 {loading ? '...' : 'Upload'}
               </button>
             )}
@@ -421,16 +426,17 @@ function StatusBadge({ status }) {
     posting: ['var(--primary)', '⟳ Posting...'],
     uploaded: ['var(--primary)', '● Scheduled'],
     failed: ['var(--danger)', '✗ Failed'],
+    unposted: ['var(--warning)', '↩ Unposted · reschedule to repost'],
     pending: ['var(--warning)', '○ Pending upload'],
   };
   const [color, label] = map[status] || ['var(--text-muted)', status];
   return <div style={{ color, fontSize: 10, marginTop: 1 }}>{label}</div>;
 }
 
-function ActionBtn({ icon, onClick, title, danger }) {
+function ActionBtn({ icon, onClick, title, danger, disabled }) {
   return (
-    <button onClick={onClick} title={title}
-      style={{ ...actionBtnBase, color: danger ? 'var(--danger)' : 'var(--text-muted)' }}>
+    <button onClick={onClick} title={title} disabled={disabled}
+      style={{ ...actionBtnBase, color: danger ? 'var(--danger)' : 'var(--text-muted)', opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' }}>
       {icon}
     </button>
   );

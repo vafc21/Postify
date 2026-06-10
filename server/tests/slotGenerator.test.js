@@ -51,6 +51,21 @@ describe('generateSlots', () => {
     });
   });
 
+  test('daily: DST fall-back day stays at the requested wall-clock time', () => {
+    // US DST ends 2026-11-01 (02:00 EDT → 01:00 EST). A 05:00 slot is after the
+    // switch, so it is 05:00 EST = 10:00 UTC. The old single-pass offset math put
+    // it an hour early (09:00 UTC / 04:00 local).
+    const campaign = {
+      id: 'camp-1', clientId: 'client-1', frequency: 'daily',
+      timesPerCycle: 1, scheduleConfig: { times: ['05:00'] }, postToStory: true,
+    };
+    const slots = generateSlots(campaign, new Date('2026-11-01T12:00:00.000Z'), 1, { timezone: 'America/New_York' });
+    expect(slots.length).toBe(1);
+    const d = new Date(slots[0].scheduledFor);
+    expect(d.getUTCHours()).toBe(10);
+    expect(d.getUTCMinutes()).toBe(0);
+  });
+
   test('slots have correct shape', () => {
     const campaign = {
       id: 'camp-1', clientId: 'client-1', frequency: 'daily',

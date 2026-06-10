@@ -12,10 +12,28 @@ const PRESETS = [
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+// "YYYY-MM-DD" in LOCAL time — using toISOString() (UTC) instead shifts the date
+// by a day for western zones in the evening, so "tomorrow" could read as today
+// and fail the future-date check.
+function localDateStr(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function todayStr() {
+  return localDateStr(new Date());
+}
+
+function tomorrowStr() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return localDateStr(d);
+}
+
 function defaultEndDate() {
   const d = new Date();
   d.setMonth(d.getMonth() + 1);
-  return d.toISOString().slice(0, 10);
+  return localDateStr(d);
 }
 
 export default function CampaignWizard({ clientId, onClose, onCreated }) {
@@ -42,7 +60,9 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
     if (step === 1) {
       if (!form.name.trim()) return setError('Campaign name is required');
       if (!form.endDate) return setError('End date is required');
-      if (new Date(form.endDate) <= new Date()) return setError('End date must be in the future');
+      // Compare calendar dates (the input is date-only) in local time, rather
+      // than parsing as UTC midnight which can read a future date as past.
+      if (form.endDate <= todayStr()) return setError('End date must be in the future');
     }
     if (step === 2 && isPreset && !form.presetTemplate) return setError('Pick a template or choose Custom');
     setError('');
@@ -109,7 +129,7 @@ export default function CampaignWizard({ clientId, onClose, onCreated }) {
             <Label>Description</Label>
             <textarea style={{ ...inputStyle, height: 60, resize: 'vertical' }} value={form.description} onChange={e => set('description', e.target.value)} placeholder="Optional..." />
             <Label>End Date *</Label>
-            <input type="date" style={inputStyle} value={form.endDate} onChange={e => set('endDate', e.target.value)} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} />
+            <input type="date" style={inputStyle} value={form.endDate} onChange={e => set('endDate', e.target.value)} min={tomorrowStr()} />
             <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>Defaults to one month from today. You can change this anytime after creating the campaign.</div>
           </div>
         )}

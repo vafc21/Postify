@@ -231,6 +231,9 @@ router.get('/campaign/:campaignId', auth, async (req, res) => {
 
     const posts = await prisma.scheduledPost.findMany({
       where,
+      // Include the client so the story-editor preview can show the real
+      // business name (it falls back to "Your page" when client is absent).
+      include: { client: { select: { id: true, name: true, businessName: true } } },
       orderBy: { scheduledFor: 'asc' },
     });
     res.json(posts);
@@ -244,14 +247,21 @@ router.get('/campaign/:campaignId', auth, async (req, res) => {
 router.post('/:id/media', auth, runUpload(uploadMedia.array('media', 10)), async (req, res) => {
   try {
     const post = await findPost(req.params.id, req.userId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (!post) {
+      // Multer already wrote the files — don't leave them orphaned on disk for a
+      // missing/foreign post (otherwise they accumulate forever).
+      (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(404).json({ error: 'Post not found' });
+    }
     if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
 
     const firstFile = req.files[0];
     const isVideo = firstFile.mimetype.startsWith('video/');
     const mediaType = isVideo ? 'video' : (req.files.length > 1 ? 'carousel' : 'photo');
-    const subdir = isVideo ? 'videos' : 'photos';
-    const mediaUrls = req.files.map(f => `/uploads/${subdir}/${f.filename}`);
+    // Each file was routed to videos/ or photos/ by its OWN mime type in the
+    // multer destination callback, so the URL must mirror that per file — using
+    // one subdir from the first file would 404 any file of the other kind.
+    const mediaUrls = req.files.map(f => `/uploads/${f.mimetype.startsWith('video/') ? 'videos' : 'photos'}/${f.filename}`);
 
     // Delete the old media files (if any) before replacing
     unlinkMediaFiles(post.mediaUrls || []);
@@ -314,7 +324,15 @@ router.put('/:id', auth, async (req, res) => {
         return res.status(400).json({ error: 'Invalid story layout' });
       }
     }
-    if (thumbOffset !== undefined) data.thumbOffset = thumbOffset === '' ? null : Number(thumbOffset);
+    if (thumbOffset !== undefined) {
+      if (thumbOffset === '' || thumbOffset === null) {
+        data.thumbOffset = null;
+      } else {
+        const n = Number(thumbOffset);
+        if (!Number.isFinite(n)) return res.status(400).json({ error: 'Cover offset must be a number' });
+        data.thumbOffset = Math.round(n);
+      }
+    }
     if (scheduledFor !== undefined) {
       if (['posting', 'posted'].includes(post.status)) {
         return res.status(400).json({ error: 'Cannot reschedule a slot that is posting or already posted' });
@@ -322,6 +340,10 @@ router.put('/:id', auth, async (req, res) => {
       const when = new Date(scheduledFor);
       if (isNaN(when.getTime())) return res.status(400).json({ error: 'Invalid date/time' });
       data.scheduledFor = when;
+      // Rescheduling a taken-down post is the deliberate "publish it again"
+      // action — re-arm it so the worker will publish at the new time. (It has
+      // media already, having been posted before.)
+      if (post.status === 'unposted') data.status = 'uploaded';
     }
 
     const updated = await prisma.scheduledPost.update({ where: { id: req.params.id }, data });
@@ -399,9 +421,14 @@ router.post('/:id/unpost', auth, async (req, res) => {
       });
     }
 
+    // Move to 'unposted', NOT 'uploaded'. The post's scheduledFor is in the past
+    // (it was already published), and the worker republishes any 'uploaded' post
+    // whose time has passed — so 'uploaded' here would re-publish what we just
+    // took down within ~60s. 'unposted' is ignored by the worker; the user
+    // re-arms it deliberately by rescheduling (see PUT /:id).
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
-      data: { status: 'uploaded', instagramResult: null, facebookResult: null },
+      data: { status: 'unposted', instagramResult: null, facebookResult: null },
     });
 
     res.json({
