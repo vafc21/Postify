@@ -137,6 +137,14 @@ async function processPost(post) {
 
     await sendWebhook(user.notificationWebhookUrl, 'post_published', updated, post.client);
   } catch (err) {
+    // The post — or its parent campaign/client — can be deleted while we're
+    // mid-publish; the cascade removes the row out from under us and Prisma
+    // throws P2025. There's nothing left to update, so skip cleanly instead of
+    // logging a failure and burning a retry attempt.
+    if (err.code === 'P2025') {
+      console.log(`Worker: post ${post.id} was deleted during publish — skipping`);
+      return;
+    }
     console.error(`Worker: failed to post ${post.id}:`, err.message);
     const nextAttempts = (post.attempts || 0) + 1;
     const giveUp = nextAttempts >= MAX_PUBLISH_ATTEMPTS;
@@ -180,7 +188,14 @@ async function publishDuePosts() {
     console.log(`Worker: publishing ${duePosts.length} due post(s)`);
   }
 
-  await Promise.allSettled(duePosts.map(processPost));
+  // Publish one post at a time. Running every due post concurrently meant
+  // several videos could be served to Meta — and several ffmpeg story-card
+  // encodes could run — at once, and that combined footprint is what
+  // OOM-killed the 512MB instance. processPost swallows its own errors, so a
+  // single failing post never stalls the rest.
+  for (const post of duePosts) {
+    await processPost(post);
+  }
 }
 
 async function topUpSlots() {
@@ -275,6 +290,14 @@ function startWorker() {
       cleanupDerivedStories();
     } catch (err) {
       console.error('Worker tick error:', err);
+    } finally {
+      // Footprint each tick so the next OOM leaves a paper trail. rss ≈ heapUsed
+      // points at JS-heap pressure (the --max-old-space-size cap helps); rss far
+      // above heapUsed points at native pressure (Prisma / image libs), where
+      // only a larger instance helps.
+      const m = process.memoryUsage();
+      const mb = (n) => Math.round(n / 1024 / 1024);
+      console.log(`Worker: mem rss=${mb(m.rss)}MB heapUsed=${mb(m.heapUsed)}MB heapTotal=${mb(m.heapTotal)}MB external=${mb(m.external)}MB`);
     }
   };
   tick();

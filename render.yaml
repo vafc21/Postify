@@ -9,6 +9,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Cap V8's heap so it garbage-collects within the 512MB container instead
+      # of growing until Render's OOM-killer fires (which is what produced the
+      # silent "used over 512MB" restarts). Tune with the worker's per-tick
+      # memory logs: if rss stays well above heapUsed, the pressure is native
+      # (Prisma / image libs), not the JS heap, and the real fix is a bigger
+      # instance rather than a lower cap.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
