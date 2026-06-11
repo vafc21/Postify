@@ -35,3 +35,6 @@ Thumbs.db
 
 # Brainstorming session files
 .superpowers/
+
+# Instagram private-API sessions (contain live login state — NEVER commit)
+server/scripts/.ig-session*.json
