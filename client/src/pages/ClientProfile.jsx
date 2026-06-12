@@ -301,6 +301,7 @@ function StoriesCard({ username, busy, message, connectUrl, onSync, onDisconnect
           <div>1. Your Storrito <strong style={{ color: 'var(--text)' }}>Instagram Accounts</strong> page opens in a new tab.</div>
           <div>2. Click <strong style={{ color: 'var(--text)' }}>Connect Account</strong>, then enter <strong style={{ color: 'var(--text)' }}>this account's</strong> Instagram username + password (and the 2FA code if asked). Trouble? Use the “Try an alternative connect method” link there.</div>
           <div>3. Come back to this tab — we'll verify automatically.</div>
+          <div style={{ marginTop: 6 }}>Rather have the client connect their own account? On that page use <strong style={{ color: 'var(--text)' }}>Share a connect-link</strong> (paid Storrito plan) and send them the link — Postify auto-verifies once they connect.</div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <button onClick={() => onSync()} disabled={busy} style={primaryBtn}>{busy ? 'Verifying…' : 'Verify now'}</button>
