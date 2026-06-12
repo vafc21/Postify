@@ -20,6 +20,9 @@ model User {
   // story publishing silently stays on the Graph path.
   storritoApiToken       String?   @map("storrito_api_token")
   storritoApiBase        String?   @map("storrito_api_base")
+  // Reusable Storrito "Share a connect-link" URL the operator pastes once; powers
+  // the per-client "Copy connect-link" button so clients self-connect their IG.
+  storritoConnectLink    String?   @map("storrito_connect_link")
   theme                  String    @default("dark")
   timezone               String    @default("America/New_York") @map("timezone")
   notificationWebhookUrl String?   @map("notification_webhook_url")

@@ -152,6 +152,7 @@ export default function ClientProfile() {
               busy={storritoBusy}
               message={storritoMsg}
               connectUrl={user?.storritoApiBase ? `${user.storritoApiBase.replace(/\/+$/, '')}/ui/instagram-connect` : 'https://app.storrito.com'}
+              connectLink={user?.storritoConnectLink}
               onSync={syncStorrito}
               onDisconnect={disconnectStorrito}
             />
@@ -252,12 +253,20 @@ function PlatformCard({ platform, token, onConnect, onDisconnect }) {
 // done, makes interactive sticker stories publish automatically. Guides the
 // operator through Storrito's connect page and auto-verifies on return.
 // `connectUrl` is the operator's own Storrito host + /ui/instagram-connect.
-function StoriesCard({ username, busy, message, connectUrl, onSync, onDisconnect }) {
+function StoriesCard({ username, busy, message, connectUrl, connectLink, onSync, onDisconnect }) {
   const connected = !!username;
   const [connecting, setConnecting] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [manualHandle, setManualHandle] = useState('');
+  const [copied, setCopied] = useState(false);
   const checkingRef = useRef(false);
+
+  const copyConnectLink = () => {
+    if (!connectLink) return;
+    navigator.clipboard?.writeText(connectLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Once the operator has opened Storrito's connect page, re-run the sync each
   // time they return to this tab — until the account links up.
@@ -297,6 +306,14 @@ function StoriesCard({ username, busy, message, connectUrl, onSync, onDisconnect
 
       {!connected && (
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          {connectLink && (
+            <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
+              <button onClick={copyConnectLink} style={{ ...primaryBtn, width: '100%', justifyContent: 'center' }}>
+                {copied ? '✓ Copied — send it to the client' : 'Copy connect-link for the client'}
+              </button>
+              <div style={{ marginTop: 6 }}>Easiest: the client opens the link, connects their own Instagram, and it auto-verifies here. Or connect it yourself below.</div>
+            </div>
+          )}
           <div style={{ marginBottom: 6 }}>One-time setup — links this client's Instagram to Storrito so sticker stories publish automatically:</div>
           <div>1. Your Storrito <strong style={{ color: 'var(--text)' }}>Instagram Accounts</strong> page opens in a new tab.</div>
           <div>2. Click <strong style={{ color: 'var(--text)' }}>Connect Account</strong>, then enter <strong style={{ color: 'var(--text)' }}>this account's</strong> Instagram username + password (and the 2FA code if asked). Trouble? Use the “Try an alternative connect method” link there.</div>

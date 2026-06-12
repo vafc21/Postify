@@ -24,7 +24,7 @@ router.get('/', auth, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      select: { id: true, email: true, metaAppId: true, metaAppSecret: true, storritoApiToken: true, storritoApiBase: true, theme: true, timezone: true, notificationWebhookUrl: true, createdAt: true },
+      select: { id: true, email: true, metaAppId: true, metaAppSecret: true, storritoApiToken: true, storritoApiBase: true, storritoConnectLink: true, theme: true, timezone: true, notificationWebhookUrl: true, createdAt: true },
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -49,7 +49,7 @@ router.get('/', auth, async (req, res) => {
 // PUT /api/settings
 router.put('/', auth, async (req, res) => {
   try {
-    const { metaAppId, metaAppSecret, storritoApiToken, storritoApiBase, theme, password, timezone, notificationWebhookUrl } = req.body;
+    const { metaAppId, metaAppSecret, storritoApiToken, storritoApiBase, storritoConnectLink, theme, password, timezone, notificationWebhookUrl } = req.body;
     const data = {};
 
     if (metaAppId !== undefined) data.metaAppId = metaAppId;
@@ -58,6 +58,7 @@ router.put('/', auth, async (req, res) => {
     // string clears it. The base URL is unique per Storrito account.
     if (storritoApiToken !== undefined) data.storritoApiToken = storritoApiToken ? encrypt(storritoApiToken) : null;
     if (storritoApiBase !== undefined) data.storritoApiBase = storritoApiBase ? storritoApiBase.trim().replace(/\/+$/, '') : null;
+    if (storritoConnectLink !== undefined) data.storritoConnectLink = storritoConnectLink ? storritoConnectLink.trim() : null;
     if (theme && ['dark', 'light'].includes(theme)) data.theme = theme;
     if (timezone !== undefined) {
       // Reject invalid IANA zones here — otherwise the bad value is stored and
@@ -77,7 +78,7 @@ router.put('/', auth, async (req, res) => {
     const user = await prisma.user.update({
       where: { id: req.userId },
       data,
-      select: { id: true, email: true, metaAppId: true, storritoApiBase: true, storritoApiToken: true, theme: true, timezone: true, notificationWebhookUrl: true },
+      select: { id: true, email: true, metaAppId: true, storritoApiBase: true, storritoConnectLink: true, storritoApiToken: true, theme: true, timezone: true, notificationWebhookUrl: true },
     });
     // Don't leak the token back; expose only a boolean + the (non-secret) base URL
     // so the UI can show "connected" and keep the field populated.

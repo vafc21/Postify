@@ -28,6 +28,7 @@ export default function Settings() {
     metaAppSecret: '',
     storritoApiBase: user?.storritoApiBase || '',
     storritoApiToken: '',
+    storritoConnectLink: user?.storritoConnectLink || '',
     password: '',
     confirmPassword: '',
     timezone: user?.timezone || 'America/New_York',
@@ -51,6 +52,7 @@ export default function Settings() {
       if (form.metaAppSecret) payload.metaAppSecret = form.metaAppSecret;
       if (form.storritoApiBase !== (user?.storritoApiBase || '')) payload.storritoApiBase = form.storritoApiBase;
       if (form.storritoApiToken) payload.storritoApiToken = form.storritoApiToken;
+      if (form.storritoConnectLink !== (user?.storritoConnectLink || '')) payload.storritoConnectLink = form.storritoConnectLink;
       if (form.password) payload.password = form.password;
       if (form.timezone !== (user?.timezone || 'America/New_York')) payload.timezone = form.timezone;
       if (form.notificationWebhookUrl !== (user?.notificationWebhookUrl || '')) {
@@ -143,6 +145,10 @@ export default function Settings() {
           </div>
           <Field label="API Base URL" value={form.storritoApiBase} onChange={set('storritoApiBase')} placeholder="https://your-account-id.storrito.com" />
           <Field label="API Token" value={form.storritoApiToken} onChange={set('storritoApiToken')} placeholder="Leave blank to keep current token" type="password" />
+          <Field label="Client connect-link (optional)" value={form.storritoConnectLink} onChange={set('storritoConnectLink')} placeholder="Paste a Storrito “Share a connect-link” URL" />
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: -4, marginBottom: 8, lineHeight: 1.5 }}>
+            Generate it in Storrito (Instagram Accounts → <strong style={{ color: 'var(--text)' }}>Share a connect-link</strong>). Pasting it here adds a “Copy connect-link” button on each client so you can send them a link to connect their own Instagram — no logins shared.
+          </div>
           {user?.storritoConfigured && <div style={{ color: 'var(--success)', fontSize: 11 }}>✓ Storrito connected</div>}
         </Section>
 
