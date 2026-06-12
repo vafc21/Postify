@@ -4,10 +4,12 @@ import { Plus, RefreshCw, Pencil, Trash2, ExternalLink } from 'lucide-react';
 import api from '../api';
 import CampaignWizard from '../components/CampaignWizard';
 import NewClientModal from '../components/NewClientModal';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function ClientProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [client, setClient] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
@@ -149,6 +151,7 @@ export default function ClientProfile() {
               username={client.storritoUsername}
               busy={storritoBusy}
               message={storritoMsg}
+              connectUrl={user?.storritoApiBase ? `${user.storritoApiBase.replace(/\/+$/, '')}/ui/instagram-connect` : 'https://app.storrito.com'}
               onSync={syncStorrito}
               onDisconnect={disconnectStorrito}
             />
@@ -245,14 +248,11 @@ function PlatformCard({ platform, token, onConnect, onDisconnect }) {
   );
 }
 
-// Storrito's online "Standard Connection" page — enter the IG username+password
-// here (no desktop app, unless the account has 2FA / Facebook login).
-const STORRITO_CONNECT_URL = 'https://app.storrito.com/#/instagram/connect';
-
 // The Stories (Storrito) connection — the one-time per-client setup that, once
 // done, makes interactive sticker stories publish automatically. Guides the
 // operator through Storrito's connect page and auto-verifies on return.
-function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
+// `connectUrl` is the operator's own Storrito host + /ui/instagram-connect.
+function StoriesCard({ username, busy, message, connectUrl, onSync, onDisconnect }) {
   const connected = !!username;
   const [connecting, setConnecting] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -273,7 +273,7 @@ function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
   }, [connecting, connected, busy, onSync]);
 
   const openConnect = () => {
-    window.open(STORRITO_CONNECT_URL, '_blank', 'noopener');
+    window.open(connectUrl, '_blank', 'noopener');
     setConnecting(true);
   };
 
@@ -298,8 +298,8 @@ function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
       {!connected && (
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
           <div style={{ marginBottom: 6 }}>One-time setup — links this client's Instagram to Storrito so sticker stories publish automatically:</div>
-          <div>1. Sign in to Storrito (opens in a new tab).</div>
-          <div>2. Connect <strong style={{ color: 'var(--text)' }}>this account's</strong> Instagram — enter its username + password. Accounts with 2FA or Facebook login need Storrito's desktop "Native Connect" app.</div>
+          <div>1. Your Storrito <strong style={{ color: 'var(--text)' }}>Instagram Accounts</strong> page opens in a new tab.</div>
+          <div>2. Click <strong style={{ color: 'var(--text)' }}>Connect Account</strong>, then enter <strong style={{ color: 'var(--text)' }}>this account's</strong> Instagram username + password (and the 2FA code if asked). Trouble? Use the “Try an alternative connect method” link there.</div>
           <div>3. Come back to this tab — we'll verify automatically.</div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
