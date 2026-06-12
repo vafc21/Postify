@@ -304,7 +304,11 @@ router.put('/:id', auth, async (req, res) => {
       if (post.status === 'unposted') data.status = 'uploaded';
     }
 
-    const updated = await prisma.scheduledPost.update({ where: { id: req.params.id }, data });
+    const updated = await prisma.scheduledPost.update({
+      where: { id: req.params.id },
+      data,
+      include: { client: { select: { id: true, name: true, businessName: true, storritoUsername: true } } },
+    });
     res.json(updated);
   } catch (err) {
     console.error(err);
