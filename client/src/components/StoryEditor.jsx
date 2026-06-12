@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Type, AtSign, Upload, RotateCw, Trash2, X } from 'lucide-react';
 import api from '../api';
+import { useAuth } from '../contexts/AuthContext';
+import { STICKERS, STICKER_ORDER, DesignPicker } from './storyStickers';
 
 // Strip only a trailing "/api" (see MediaSlot) so a host like "api.example.com"
 // isn't mangled by replacing the first "/api".
@@ -75,6 +77,11 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
   const [selectedId, setSelectedId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  const { user } = useAuth();
+  // Interactive stickers are Instagram + Storrito only: the operator must have
+  // Storrito creds AND this client must be linked in Storrito.
+  const storritoReady = !!(user?.storritoConfigured && post.client?.storritoUsername);
 
   const canvasRef = useRef(null);
   const [canvas, setCanvas] = useState({ w: 1, h: 1 });
@@ -188,6 +195,11 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
       return;
     }
     const el = { id: 'mention', type: 'mention', x: 0.5, y: 0.74, rotation: 0 };
+    setElements((els) => [...els, el]);
+    setSelectedId(el.id);
+  };
+  const addSticker = (key) => {
+    const el = { ...STICKERS[key].makeDefault(), id: nextId() };
     setElements((els) => [...els, el]);
     setSelectedId(el.id);
   };
@@ -339,12 +351,25 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
             </Section>
 
             <Section title="Add to story">
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <button style={addBtn} onClick={addText}><Type size={16} /> Text box</button>
                 <button style={{ ...addBtn, opacity: platform === 'facebook' ? 0.45 : 1 }} disabled={platform === 'facebook'} onClick={addMention}>
                   <AtSign size={16} /> Mention
                 </button>
+                {platform === 'instagram' && STICKER_ORDER.map((k) => {
+                  const S = STICKERS[k];
+                  const Icon = S.icon;
+                  return (
+                    <button key={k} style={{ ...addBtn, opacity: storritoReady ? 1 : 0.45 }} disabled={!storritoReady}
+                      title={storritoReady ? '' : 'Connect Storrito to use interactive stickers'} onClick={() => addSticker(k)}>
+                      <Icon size={16} /> {S.label}
+                    </button>
+                  );
+                })}
               </div>
+              {platform === 'instagram' && !storritoReady && (
+                <div style={{ ...hintBox, marginTop: 8 }}>Interactive stickers publish through Storrito — connect it in Settings and link this client to enable.</div>
+              )}
             </Section>
 
             <Section title="Selected element">
@@ -371,6 +396,8 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, mediaAs
 
   // Mention is Instagram-only; hide it in the Facebook preview.
   if (el.type === 'mention' && platform === 'facebook') return null;
+  // Interactive Storrito stickers are Instagram-only.
+  if (STICKERS[el.type] && platform === 'facebook') return null;
 
   // The post card can't be removed (there's no way to add it back) and, for
   // video posts, can't be rotated — the server forces a video card's rotation to
@@ -447,6 +474,17 @@ function EditableElement({ el, selected, scale, name, photoUrl, isVideo, mediaAs
     );
   }
 
+  const sticker = STICKERS[el.type];
+  if (sticker) {
+    const SPreview = sticker.Preview;
+    return (
+      <div ref={ref} style={wrap} onPointerDown={(e) => onDragStart(e, el)} onClick={onSelect}>
+        {handles}
+        <SPreview el={el} scale={scale} />
+      </div>
+    );
+  }
+
   // text
   return (
     <div ref={ref} style={wrap} onPointerDown={(e) => onDragStart(e, el)} onClick={onSelect}
@@ -498,8 +536,20 @@ function ElementControls({ el, isVideo, onChange, onRemove }) {
         <Field label={`Size · ${Math.round((el.scale || 1) * 100)}%`}>
           <input type="range" min="60" max="220" value={Math.round((el.scale || 1) * 100)} onChange={(e) => onChange({ scale: Number(e.target.value) / 100 })} style={{ width: '100%', accentColor: 'var(--primary)' }} />
         </Field>
+        <DesignPicker type="mention" value={el.design} onChange={(d) => onChange({ design: d })} />
         <RotationField el={el} onChange={onChange} />
         <button onClick={onRemove} style={dangerBtn}><Trash2 size={12} /> Remove mention</button>
+      </>
+    );
+  }
+  const sticker = STICKERS[el.type];
+  if (sticker) {
+    const SControls = sticker.Controls;
+    return (
+      <>
+        <SControls el={el} onChange={onChange} />
+        <RotationField el={el} onChange={onChange} />
+        <button onClick={onRemove} style={dangerBtn}><Trash2 size={12} /> Delete {sticker.label.toLowerCase()}</button>
       </>
     );
   }

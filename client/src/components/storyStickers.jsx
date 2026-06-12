@@ -22,7 +22,7 @@ const POLL_ACCENT = {
 };
 
 const inp = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-3)', color: 'var(--text)', fontSize: 13 };
-const iconBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, border: '1px solid var(--border)', background: 'var(--bg-3)', color: 'var(--danger)', borderRadius: 8, cursor: 'pointer' };
+const iconBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 34, border: '1px solid var(--border)', background: 'var(--bg-3)', color: 'var(--danger)', borderRadius: 8, cursor: 'pointer' };
 const addOptBtn = { display: 'flex', alignItems: 'center', gap: 5, border: '1px dashed var(--border)', background: 'var(--bg-3)', color: 'var(--text)', borderRadius: 8, padding: '6px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' };
 
 function Field({ label, children }) {
