@@ -1,19 +1,22 @@
 /**
  * Storrito provider — publishes Instagram Stories with NATIVE interactive
- * stickers (polls, link stickers, hashtags, mentions) that Meta's Graph API does
- * not expose. Storrito accepts a Story as HTML built from `<insta-story>` web
- * components and posts it by automating the Instagram app on its side.
+ * stickers (polls, link stickers, hashtags, mentions, location) that Meta's
+ * Graph API does not expose. Storrito accepts a Story as HTML built from
+ * `<insta-story>` web components and posts it by automating Instagram on its side.
  *
- * SCAFFOLDING STATUS: the exact request/response schemas live behind a Storrito
- * login (API Credentials → Documentation) and are NOT yet confirmed. Everything
- * marked `TODO(storrito-docs)` is a best-effort guess from the public help pages
- * and must be verified against the real API reference before this goes live.
+ * The request/response schemas below are CONFIRMED against Storrito's published
+ * API reference (account → API Credentials → Documentation, and the public
+ * help-center copy at https://storrito.com/help-center/storrito-api/). All
+ * procedures are HTTP POST under `<base>/api/v1/<procedure>` with a Bearer token
+ * and a JSON map body; the API validates params strictly (unknown keys are
+ * rejected), so we only ever send documented fields.
  *
  * SAFETY: every network call is gated by `isConfigured()`. With no token/base on
  * the user (the default today), the public functions throw
  * StorritoNotConfiguredError and the publish path silently falls back to the
  * Graph story — so wiring this in changes NOTHING until an operator pastes creds.
  */
+const crypto = require('crypto');
 const axios = require('axios');
 const { readToken } = require('../utils/encryption');
 
@@ -23,9 +26,14 @@ const { readToken } = require('../utils/encryption');
 // via user_tags, so a mention-only story doesn't need to incur Storrito cost.
 const STORRITO_ONLY_TYPES = new Set(['link', 'hashtag', 'poll']);
 
-// Storrito's own published rate limits (help center): used to fail fast with a
-// clear message rather than letting Instagram silently throttle.
+// The story canvas is a fixed 1080x1920 (9:16) — there are no width/height
+// attributes on <insta-story>; positioning is plain absolute CSS in this space.
 const STORY_DIMENSIONS = { width: 1080, height: 1920 };
+
+// HTTP statuses the API tells us to retry: 429 (rate limit, default 60 req/min)
+// and the load-balancer's 502/503/504 during deploys. Retry with ~2s + jitter.
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const MAX_ATTEMPTS = 5;
 
 class StorritoNotConfiguredError extends Error {
   constructor(msg = 'Storrito API is not configured for this operator') {
@@ -63,9 +71,13 @@ function stickerGapReason(user, client, layout) {
   return null;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Build an authenticated axios client bound to the operator's Storrito account.
  * The token is decrypted here (stored encrypted at rest, like metaAppSecret).
+ * `storritoApiBase` is the per-account host (e.g. https://<uuid>.storrito.com);
+ * the `/api/v1/<procedure>` path is appended by `rpc`.
  */
 function clientFor(user) {
   if (!isConfigured(user)) throw new StorritoNotConfiguredError();
@@ -78,23 +90,46 @@ function clientFor(user) {
 }
 
 /**
+ * Call one API procedure with the retry/backoff the docs require: on 429 and
+ * transient 5xx (502/503/504) wait ~2s + 0-999ms jitter and retry, up to 5
+ * attempts. Every other error (400 validation, 401 auth, 500) is thrown as-is.
+ * Returns the parsed response map.
+ */
+async function rpc(http, procedure, params = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { data } = await http.post(`/api/v1/${procedure}`, params);
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const status = err.response?.status;
+      if (RETRYABLE_STATUS.has(status) && attempt < MAX_ATTEMPTS) {
+        await sleep(2000 + Math.floor(Math.random() * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * List the Instagram accounts connected to this Storrito account. Postify matches
  * one of these to a Postify client (by IG username) to mark Stories "Connected".
- * Returns [{ instagramUsername }, ...].
+ * Returns [{ instagramUsername, instagramId, raw }, ...].
  *
- * CONFIRMED from Storrito's public API page (verbatim curl):
- *   curl -X POST https://YOUR-BASE-URL/api/v1/list-instagram-users \
- *     -H "Authorization: Bearer YOUR_TOKEN" -H "Content-Type: application/json" -d '{}'
- * Only the response envelope shape (array vs { instagramUsers }) is still
- * defensively handled below until the in-account docs confirm it.
+ * CONFIRMED: `list-instagram-users` returns { instagramUsers: [{ instagramId,
+ * instagramUsername }] }. The array/`users` fallbacks are kept defensively.
  */
 async function listInstagramUsers(user) {
   const http = clientFor(user);
-  const { data } = await http.post('/api/v1/list-instagram-users', {});
+  const data = await rpc(http, 'list-instagram-users', {});
   const list = Array.isArray(data) ? data : (data?.instagramUsers || data?.users || []);
   return list
     .map((u) => ({
       instagramUsername: (u.instagramUsername || u.username || '').replace(/^@/, ''),
+      instagramId: u.instagramId || u.id || null,
       raw: u,
     }))
     .filter((u) => u.instagramUsername);
@@ -106,15 +141,16 @@ async function listInstagramUsers(user) {
  * The fully rendered 9:16 card (text, the reshared post image, background) is
  * passed as `backgroundUrl` and baked in as the base image — so here we only emit
  * the INTERACTIVE stickers that must stay native and tappable. Element coords are
- * normalized 0–1, mapped to left/top percentages.
- *
- * TODO(storrito-docs): confirm the exact custom-element tag names and attributes
- * (`<insta-link href>`, `<insta-hashtag>`, `<insta-mention>`, `<insta-poll>`).
+ * normalized 0–1 and mapped to absolute pixels on the 1080x1920 canvas, centered
+ * on the point. Sticker data lives in component ATTRIBUTES (not text content):
+ *   <insta-link url text> · <insta-hashtag hashtag> · <insta-mention username>
+ *   <insta-poll question options(JSON)> · <insta-location location location-id>
  */
 function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername }) {
   const { width, height } = STORY_DIMENSIONS;
-  const pct = (v) => `${Math.max(0, Math.min(1, Number(v) || 0)) * 100}%`;
-  const at = (el) => `position:absolute;left:${pct(el.x)};top:${pct(el.y)};transform:translate(-50%,-50%)`;
+  const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+  const px = (v, span) => `${Math.round(clamp01(v) * span)}px`;
+  const at = (el) => `position:absolute;left:${px(el.x, width)};top:${px(el.y, height)};transform:translate(-50%,-50%)`;
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -122,22 +158,27 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
   for (const el of (layout?.elements || [])) {
     if (!el) continue;
     if (el.type === 'link' && el.url) {
-      stickers.push(`<insta-link style="${at(el)}" href="${esc(el.url)}">${esc(el.label || 'Visit')}</insta-link>`);
+      const text = el.label ? ` text="${esc(el.label)}"` : '';
+      stickers.push(`<insta-link style="${at(el)}" url="${esc(el.url)}"${text}></insta-link>`);
     } else if (el.type === 'hashtag' && el.tag) {
-      stickers.push(`<insta-hashtag style="${at(el)}">${esc(String(el.tag).replace(/^#/, ''))}</insta-hashtag>`);
+      stickers.push(`<insta-hashtag style="${at(el)}" hashtag="${esc(String(el.tag).replace(/^#/, ''))}"></insta-hashtag>`);
     } else if (el.type === 'poll' && el.question) {
-      const opts = Array.isArray(el.options) && el.options.length >= 2 ? el.options : ['Yes', 'No'];
-      stickers.push(`<insta-poll style="${at(el)}" question="${esc(el.question)}" option1="${esc(opts[0])}" option2="${esc(opts[1])}"></insta-poll>`);
+      const opts = (Array.isArray(el.options) && el.options.length >= 2 ? el.options : ['Yes', 'No'])
+        .slice(0, 4).map((o) => String(o));
+      stickers.push(`<insta-poll style="${at(el)}" question="${esc(el.question)}" options="${esc(JSON.stringify(opts))}"></insta-poll>`);
     } else if (el.type === 'mention' && (el.username || fallbackMentionUsername)) {
-      stickers.push(`<insta-mention style="${at(el)}">${esc((el.username || fallbackMentionUsername).replace(/^@/, ''))}</insta-mention>`);
+      stickers.push(`<insta-mention style="${at(el)}" username="${esc((el.username || fallbackMentionUsername).replace(/^@/, ''))}"></insta-mention>`);
+    } else if (el.type === 'location' && el.location) {
+      const locId = el.locationId ? ` location-id="${esc(el.locationId)}"` : '';
+      stickers.push(`<insta-location style="${at(el)}" location="${esc(el.location)}"${locId}></insta-location>`);
     }
   }
 
   return [
-    `<insta-story width="${width}" height="${height}">`,
-    `  <img src="${esc(backgroundUrl)}" width="${width}" height="${height}" style="position:absolute;inset:0" />`,
+    '<insta-story>',
+    `  <img src="${esc(backgroundUrl)}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover" />`,
     ...stickers.map((s) => `  ${s}`),
-    `</insta-story>`,
+    '</insta-story>',
   ].join('\n');
 }
 
@@ -149,42 +190,51 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
  * @param {string}  backgroundUrl       absolute URL to the rendered 9:16 card
  * @param {object}  layout              the story layout (source of native stickers)
  * @param {string}  fallbackMentionUsername  used for a bare self-mention element
- * @returns {{ storyId: string, raw: object }}
+ * @param {string}  [storyPostUuid]     caller-supplied idempotency UUID; one is
+ *                                      generated when omitted
+ * @returns {{ storyId: string, status: string, raw: object }}  storyId is the
+ *          storyPostUuid — pass it to getStoryStatus/cancelStory.
  *
- * CONFIRMED from the public API page: the endpoint is `schedule-instagram-story`
- * and it consumes the `instagramUsername` from list-instagram-users plus a Story
- * built from `<insta-story>` HTML. The exact BODY FIELD NAME for the HTML is the
- * one thing still unconfirmed — `html` is the working guess; the in-account docs
- * may call it `story` / `storyHtml` / `content` (a one-line change if so).
- * `scheduledAt` omitted = post now (Postify already owns the schedule).
+ * CONFIRMED: `schedule-instagram-story` requires `instagramUsername` and
+ * `storyPostUuid`; the story HTML goes in `html` (or a hosted `url`); an optional
+ * ISO-8601 `date` schedules for later (omitted = post now — Postify owns timing).
+ * Re-sending the same `storyPostUuid` is idempotent, so retries can't double-post.
+ * The response echoes { storyPostUuid, status: "scheduled" }.
  */
-async function publishStickerStory({ user, instagramUsername, backgroundUrl, layout, fallbackMentionUsername }) {
+async function publishStickerStory({ user, instagramUsername, backgroundUrl, layout, fallbackMentionUsername, storyPostUuid }) {
   const http = clientFor(user);
   const html = buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername });
-  const { data } = await http.post('/api/v1/schedule-instagram-story', {
+  const uuid = storyPostUuid || crypto.randomUUID();
+  const data = await rpc(http, 'schedule-instagram-story', {
     instagramUsername,
+    storyPostUuid: uuid,
     html,
   });
-  return { storyId: data?.id || data?.storyId || data?.jobId || null, raw: data };
+  return { storyId: data?.storyPostUuid || uuid, status: data?.status || null, raw: data };
 }
 
 /**
- * Cancel a still-queued Storrito story. Best-effort; safe to call speculatively.
- * TODO(storrito-docs): path follows the observed `-instagram-story` naming, but
- * cancel/status aren't shown publicly — confirm against the in-account reference.
+ * Cancel a still-queued Storrito story. Best-effort; safe to call speculatively
+ * and idempotent server-side. Throws if the story already executed/failed.
+ * CONFIRMED: `cancel-instagram-story` takes { storyPostUuid }.
  */
-async function cancelStory(user, storyId) {
-  if (!storyId) return false;
+async function cancelStory(user, storyPostUuid) {
+  if (!storyPostUuid) return false;
   const http = clientFor(user);
-  await http.post('/api/v1/cancel-instagram-story', { id: storyId });
+  await rpc(http, 'cancel-instagram-story', { storyPostUuid });
   return true;
 }
 
-/** Poll the status of a submitted story (queued | posted | failed). TBD path. */
-async function getStoryStatus(user, storyId) {
+/**
+ * Poll the posting status of a submitted story.
+ * CONFIRMED: `status-instagram-story` takes { storyPostUuid } and returns
+ * { storyPostUuid, status, errorMessage? } where status is one of
+ * scheduled | executed | failed | canceled.
+ */
+async function getStoryStatus(user, storyPostUuid) {
   const http = clientFor(user);
-  const { data } = await http.post('/api/v1/instagram-story-status', { id: storyId });
-  return data?.status || data?.state || 'unknown';
+  const data = await rpc(http, 'status-instagram-story', { storyPostUuid });
+  return data?.status || 'unknown';
 }
 
 module.exports = {

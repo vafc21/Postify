@@ -139,9 +139,9 @@ export default function Settings() {
 
         <Section title="Stories API (Storrito)">
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10, lineHeight: 1.6 }}>
-            Optional. Lets clients marked "uses Stories" publish interactive story stickers (polls, link stickers, hashtags) that Meta's API can't. Get a token from your Storrito account under <strong style={{ color: 'var(--text)' }}>API Credentials</strong>; the base URL is shown on the same screen. Without this, stories still post — just without native stickers.
+            Optional. Lets clients marked "uses Stories" publish interactive story stickers (polls, link stickers, hashtags) that Meta's API can't. Create a token in your Storrito account under <strong style={{ color: 'var(--text)' }}>API Credentials</strong> (shown once — it can't be retrieved later); the Base URL is your account-specific host on the same screen. Without this, stories still post — just without native stickers.
           </div>
-          <Field label="API Base URL" value={form.storritoApiBase} onChange={set('storritoApiBase')} placeholder="https://api.storrito.com/your-account" />
+          <Field label="API Base URL" value={form.storritoApiBase} onChange={set('storritoApiBase')} placeholder="https://your-account-id.storrito.com" />
           <Field label="API Token" value={form.storritoApiToken} onChange={set('storritoApiToken')} placeholder="Leave blank to keep current token" type="password" />
           {user?.storritoConfigured && <div style={{ color: 'var(--success)', fontSize: 11 }}>✓ Storrito connected</div>}
         </Section>
