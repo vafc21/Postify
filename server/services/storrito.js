@@ -30,6 +30,27 @@ const STORRITO_ONLY_TYPES = new Set(['link', 'hashtag', 'poll']);
 // attributes on <insta-story>; positioning is plain absolute CSS in this space.
 const STORY_DIMENSIONS = { width: 1080, height: 1920 };
 
+// Per-sticker style variant: which attribute carries it, the allowed values, and
+// the default (omitted from the HTML). MUST mirror the client VARIANTS in
+// client/src/components/storyStickers.jsx.
+const STICKER_VARIANTS = {
+  link:     { attr: 'design', allowed: ['default', 'gray', 'black', 'rainbow'], def: 'default' },
+  hashtag:  { attr: 'design', allowed: ['default', 'gray', 'rainbow'], def: 'default' },
+  mention:  { attr: 'design', allowed: ['default', 'gray', 'rainbow'], def: 'default' },
+  location: { attr: 'design', allowed: ['default', 'gray', 'black', 'orange', 'rainbow'], def: 'default' },
+  poll:     { attr: 'color', allowed: ['black', 'pink', 'lavender', 'purple', 'orange', 'green', 'blue'], def: 'black' },
+};
+
+// Returns e.g. ` design="gray"` for a valid non-default variant, else '' (the
+// default and any unrecognized value are omitted to keep the HTML clean).
+function variantAttr(type, el) {
+  const v = STICKER_VARIANTS[type];
+  if (!v) return '';
+  const raw = el[v.attr];
+  if (!raw || raw === v.def || !v.allowed.includes(raw)) return '';
+  return ` ${v.attr}="${raw}"`;
+}
+
 // HTTP statuses the API tells us to retry: 429 (rate limit, default 60 req/min)
 // and the load-balancer's 502/503/504 during deploys. Retry with ~2s + jitter.
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
@@ -158,19 +179,20 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
   for (const el of (layout?.elements || [])) {
     if (!el) continue;
     if (el.type === 'link' && el.url) {
-      const text = el.label ? ` text="${esc(el.label)}"` : '';
-      stickers.push(`<insta-link style="${at(el)}" url="${esc(el.url)}"${text}></insta-link>`);
+      const label = el.text || el.label; // editor stores the label in `text`
+      const text = label ? ` text="${esc(label)}"` : '';
+      stickers.push(`<insta-link style="${at(el)}" url="${esc(el.url)}"${text}${variantAttr('link', el)}></insta-link>`);
     } else if (el.type === 'hashtag' && el.tag) {
-      stickers.push(`<insta-hashtag style="${at(el)}" hashtag="${esc(String(el.tag).replace(/^#/, ''))}"></insta-hashtag>`);
+      stickers.push(`<insta-hashtag style="${at(el)}" hashtag="${esc(String(el.tag).replace(/^#/, ''))}"${variantAttr('hashtag', el)}></insta-hashtag>`);
     } else if (el.type === 'poll' && el.question) {
       const opts = (Array.isArray(el.options) && el.options.length >= 2 ? el.options : ['Yes', 'No'])
         .slice(0, 4).map((o) => String(o));
-      stickers.push(`<insta-poll style="${at(el)}" question="${esc(el.question)}" options="${esc(JSON.stringify(opts))}"></insta-poll>`);
+      stickers.push(`<insta-poll style="${at(el)}" question="${esc(el.question)}" options="${esc(JSON.stringify(opts))}"${variantAttr('poll', el)}></insta-poll>`);
     } else if (el.type === 'mention' && (el.username || fallbackMentionUsername)) {
-      stickers.push(`<insta-mention style="${at(el)}" username="${esc((el.username || fallbackMentionUsername).replace(/^@/, ''))}"></insta-mention>`);
+      stickers.push(`<insta-mention style="${at(el)}" username="${esc((el.username || fallbackMentionUsername).replace(/^@/, ''))}"${variantAttr('mention', el)}></insta-mention>`);
     } else if (el.type === 'location' && el.location) {
       const locId = el.locationId ? ` location-id="${esc(el.locationId)}"` : '';
-      stickers.push(`<insta-location style="${at(el)}" location="${esc(el.location)}"${locId}></insta-location>`);
+      stickers.push(`<insta-location style="${at(el)}" location="${esc(el.location)}"${locId}${variantAttr('location', el)}></insta-location>`);
     }
   }
 
