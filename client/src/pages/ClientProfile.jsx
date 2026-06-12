@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, RefreshCw, Pencil, Trash2 } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, Trash2, ExternalLink } from 'lucide-react';
 import api from '../api';
 import CampaignWizard from '../components/CampaignWizard';
 import NewClientModal from '../components/NewClientModal';
@@ -64,11 +64,12 @@ export default function ClientProfile() {
 
   // One-time "Connect for Stories" verification: checks whether this client's IG
   // account is linked inside the operator's Storrito account. On success it's
-  // recorded and sticker stories publish automatically from then on.
-  const syncStorrito = async () => {
+  // recorded and sticker stories publish automatically from then on. An optional
+  // handle is forwarded when the IG handle can't be auto-resolved from Postify.
+  const syncStorrito = async (handle) => {
     setStorritoBusy(true); setStorritoMsg('');
     try {
-      const { data } = await api.post(`/clients/${id}/storrito/sync`);
+      const { data } = await api.post(`/clients/${id}/storrito/sync`, handle ? { instagramUsername: handle } : {});
       if (data.connected) { setStorritoMsg(''); load(); }
       else setStorritoMsg(data.message || `Connect @${data.instagramUsername} in Storrito, then verify again.`);
     } catch (err) {
@@ -244,11 +245,38 @@ function PlatformCard({ platform, token, onConnect, onDisconnect }) {
   );
 }
 
+// Storrito's online "Standard Connection" page — enter the IG username+password
+// here (no desktop app, unless the account has 2FA / Facebook login).
+const STORRITO_CONNECT_URL = 'https://app.storrito.com/#/instagram/connect';
+
 // The Stories (Storrito) connection — the one-time per-client setup that, once
-// done, makes interactive sticker stories publish automatically. Mirrors
-// PlatformCard's look so it reads as a third social connection.
+// done, makes interactive sticker stories publish automatically. Guides the
+// operator through Storrito's connect page and auto-verifies on return.
 function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
   const connected = !!username;
+  const [connecting, setConnecting] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const [manualHandle, setManualHandle] = useState('');
+  const checkingRef = useRef(false);
+
+  // Once the operator has opened Storrito's connect page, re-run the sync each
+  // time they return to this tab — until the account links up.
+  useEffect(() => {
+    if (!connecting || connected) return undefined;
+    const onFocus = () => {
+      if (checkingRef.current || busy) return;
+      checkingRef.current = true;
+      Promise.resolve(onSync()).finally(() => { checkingRef.current = false; });
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [connecting, connected, busy, onSync]);
+
+  const openConnect = () => {
+    window.open(STORRITO_CONNECT_URL, '_blank', 'noopener');
+    setConnecting(true);
+  };
+
   return (
     <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -263,9 +291,36 @@ function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
         </div>
         {connected
           ? <button onClick={onDisconnect} style={ghostBtn}><RefreshCw size={11} /> Remove</button>
-          : <button onClick={onSync} disabled={busy} style={primaryBtn}>{busy ? 'Verifying…' : 'Connect for Stories'}</button>
+          : <button onClick={openConnect} style={primaryBtn}><ExternalLink size={11} /> Open Storrito connect</button>
         }
       </div>
+
+      {!connected && (
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          <div style={{ marginBottom: 6 }}>One-time setup — links this client's Instagram to Storrito so sticker stories publish automatically:</div>
+          <div>1. Sign in to Storrito (opens in a new tab).</div>
+          <div>2. Connect <strong style={{ color: 'var(--text)' }}>this account's</strong> Instagram — enter its username + password. Accounts with 2FA or Facebook login need Storrito's desktop "Native Connect" app.</div>
+          <div>3. Come back to this tab — we'll verify automatically.</div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button onClick={() => onSync()} disabled={busy} style={primaryBtn}>{busy ? 'Verifying…' : 'Verify now'}</button>
+            <button onClick={() => setShowManual((s) => !s)} style={ghostBtn}>{showManual ? 'Hide' : 'Enter handle manually'}</button>
+          </div>
+
+          {showManual && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input
+                value={manualHandle}
+                onChange={(e) => setManualHandle(e.target.value)}
+                placeholder="instagram_handle"
+                style={{ flex: 1, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-3)', color: 'var(--text)', fontSize: 12 }}
+              />
+              <button onClick={() => onSync(manualHandle.trim().replace(/^@/, ''))} disabled={busy || !manualHandle.trim()} style={primaryBtn}>Verify</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {!connected && message && (
         <div style={{ marginTop: 8, fontSize: 11, color: 'var(--warning)', lineHeight: 1.4 }}>{message}</div>
       )}
