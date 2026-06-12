@@ -262,6 +262,7 @@ async function getStoryStatus(user, storyPostUuid) {
 module.exports = {
   StorritoNotConfiguredError,
   STORRITO_ONLY_TYPES,
+  STICKER_VARIANTS,
   isConfigured,
   layoutHasNativeStickers,
   stickerGapReason,
