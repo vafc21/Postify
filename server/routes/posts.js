@@ -255,7 +255,7 @@ router.get('/campaign/:campaignId', auth, async (req, res) => {
       where,
       // Include the client so the story-editor preview can show the real
       // business name (it falls back to "Your page" when client is absent).
-      include: { client: { select: { id: true, name: true, businessName: true } } },
+      include: { client: { select: { id: true, name: true, businessName: true, storritoUsername: true } } },
       orderBy: { scheduledFor: 'asc' },
     });
     res.json(posts);
