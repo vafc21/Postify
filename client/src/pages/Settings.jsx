@@ -26,6 +26,8 @@ export default function Settings() {
   const [form, setForm] = useState({
     metaAppId: user?.metaAppId || '',
     metaAppSecret: '',
+    storritoApiBase: user?.storritoApiBase || '',
+    storritoApiToken: '',
     password: '',
     confirmPassword: '',
     timezone: user?.timezone || 'America/New_York',
@@ -47,6 +49,8 @@ export default function Settings() {
       const payload = {};
       if (form.metaAppId !== (user?.metaAppId || '')) payload.metaAppId = form.metaAppId;
       if (form.metaAppSecret) payload.metaAppSecret = form.metaAppSecret;
+      if (form.storritoApiBase !== (user?.storritoApiBase || '')) payload.storritoApiBase = form.storritoApiBase;
+      if (form.storritoApiToken) payload.storritoApiToken = form.storritoApiToken;
       if (form.password) payload.password = form.password;
       if (form.timezone !== (user?.timezone || 'America/New_York')) payload.timezone = form.timezone;
       if (form.notificationWebhookUrl !== (user?.notificationWebhookUrl || '')) {
@@ -60,7 +64,7 @@ export default function Settings() {
       const { data } = await api.put('/settings', payload);
       updateUser(data);
       setSaved(true); setTimeout(() => setSaved(false), 2000);
-      setForm(f => ({ ...f, metaAppSecret: '', password: '', confirmPassword: '' }));
+      setForm(f => ({ ...f, metaAppSecret: '', storritoApiToken: '', password: '', confirmPassword: '' }));
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save settings');
     } finally {
@@ -131,6 +135,15 @@ export default function Settings() {
           <Field label="App ID" value={form.metaAppId} onChange={set('metaAppId')} placeholder="Your Meta App ID" />
           <Field label="App Secret" value={form.metaAppSecret} onChange={set('metaAppSecret')} placeholder="Leave blank to keep current secret" type="password" />
           {user?.metaAppId && <div style={{ color: 'var(--success)', fontSize: 11 }}>✓ App ID saved</div>}
+        </Section>
+
+        <Section title="Stories API (Storrito)">
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10, lineHeight: 1.6 }}>
+            Optional. Lets clients marked "uses Stories" publish interactive story stickers (polls, link stickers, hashtags) that Meta's API can't. Get a token from your Storrito account under <strong style={{ color: 'var(--text)' }}>API Credentials</strong>; the base URL is shown on the same screen. Without this, stories still post — just without native stickers.
+          </div>
+          <Field label="API Base URL" value={form.storritoApiBase} onChange={set('storritoApiBase')} placeholder="https://api.storrito.com/your-account" />
+          <Field label="API Token" value={form.storritoApiToken} onChange={set('storritoApiToken')} placeholder="Leave blank to keep current token" type="password" />
+          {user?.storritoConfigured && <div style={{ color: 'var(--success)', fontSize: 11 }}>✓ Storrito connected</div>}
         </Section>
 
         <Section title="Account">

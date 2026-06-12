@@ -12,6 +12,7 @@ export default function NewClientModal({ onClose, onCreated, client }) {
     contactName: client?.contactName || '',
     contactEmail: client?.contactEmail || '',
     notes: client?.notes || '',
+    usesStories: client?.usesStories || false,
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -59,6 +60,20 @@ export default function NewClientModal({ onClose, onCreated, client }) {
             <label style={labelStyle}>Notes</label>
             <textarea style={{ ...inputStyle, height: 60, resize: 'vertical' }} value={form.notes} onChange={set('notes')} placeholder="Optional notes..." />
           </div>
+          <label style={toggleRowStyle}>
+            <input
+              type="checkbox"
+              checked={form.usesStories}
+              onChange={e => setForm(f => ({ ...f, usesStories: e.target.checked }))}
+              style={{ width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' }}
+            />
+            <div>
+              <div style={{ color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>This client will use Stories</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
+                Enables interactive story stickers (polls, links, hashtags). You'll connect their Stories account once from the profile page.
+              </div>
+            </div>
+          </label>
           {!isEdit && (
             <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
               ℹ Instagram and Facebook accounts are connected after the client is created, from their profile page.
@@ -88,6 +103,7 @@ function Field({ label, value, onChange, placeholder, type = 'text' }) {
 const overlayStyle = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalStyle = { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, width: 540, maxHeight: '90vh', overflow: 'auto' };
 const rowStyle = { display: 'flex', gap: 12 };
+const toggleRowStyle = { display: 'flex', gap: 10, alignItems: 'flex-start', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', cursor: 'pointer' };
 const labelStyle = { display: 'block', color: 'var(--text-muted)', fontSize: 10, fontWeight: 700, letterSpacing: 1, marginBottom: 4, textTransform: 'uppercase' };
 const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, outline: 'none' };
 const iconBtnStyle = { background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 };

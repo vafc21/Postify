@@ -13,6 +13,8 @@ export default function ClientProfile() {
   const [showWizard, setShowWizard] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [storritoBusy, setStorritoBusy] = useState(false);
+  const [storritoMsg, setStorritoMsg] = useState('');
 
   // Drop stale results when the client id changes mid-flight (see CampaignView).
   const reqId = useRef(0);
@@ -57,6 +59,32 @@ export default function ClientProfile() {
       load();
     } catch (err) {
       alert(err.response?.data?.error || `Failed to disconnect ${platform}`);
+    }
+  };
+
+  // One-time "Connect for Stories" verification: checks whether this client's IG
+  // account is linked inside the operator's Storrito account. On success it's
+  // recorded and sticker stories publish automatically from then on.
+  const syncStorrito = async () => {
+    setStorritoBusy(true); setStorritoMsg('');
+    try {
+      const { data } = await api.post(`/clients/${id}/storrito/sync`);
+      if (data.connected) { setStorritoMsg(''); load(); }
+      else setStorritoMsg(data.message || `Connect @${data.instagramUsername} in Storrito, then verify again.`);
+    } catch (err) {
+      setStorritoMsg(err.response?.data?.error || 'Failed to verify Stories connection');
+    } finally {
+      setStorritoBusy(false);
+    }
+  };
+
+  const disconnectStorrito = async () => {
+    if (!confirm('Remove the Stories connection? The account stays connected in Storrito; Postify just stops publishing sticker stories to it.')) return;
+    try {
+      await api.delete(`/clients/${id}/storrito`);
+      setStorritoMsg(''); load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to remove Stories connection');
     }
   };
 
@@ -115,6 +143,15 @@ export default function ClientProfile() {
           <SectionLabel>Social Connections</SectionLabel>
           <PlatformCard platform="instagram" token={igToken} onConnect={() => connectPlatform('instagram')} onDisconnect={() => disconnectPlatform('instagram')} />
           <PlatformCard platform="facebook" token={fbToken} onConnect={() => connectPlatform('facebook')} onDisconnect={() => disconnectPlatform('facebook')} />
+          {client.usesStories && (
+            <StoriesCard
+              username={client.storritoUsername}
+              busy={storritoBusy}
+              message={storritoMsg}
+              onSync={syncStorrito}
+              onDisconnect={disconnectStorrito}
+            />
+          )}
 
           {(client.industry || client.contactName || client.contactEmail) && (
             <>
@@ -203,6 +240,35 @@ function PlatformCard({ platform, token, onConnect, onDisconnect }) {
         ? <button onClick={onDisconnect} style={ghostBtn}><RefreshCw size={11} /> Reconnect</button>
         : <button onClick={onConnect} style={primaryBtn}>Connect</button>
       }
+    </div>
+  );
+}
+
+// The Stories (Storrito) connection — the one-time per-client setup that, once
+// done, makes interactive sticker stories publish automatically. Mirrors
+// PlatformCard's look so it reads as a third social connection.
+function StoriesCard({ username, busy, message, onSync, onDisconnect }) {
+  const connected = !!username;
+  return (
+    <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 6, background: 'linear-gradient(135deg,#8b5cf6,#ec4899)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 14 }}>✨</div>
+          <div>
+            <div style={{ color: 'var(--text)', fontSize: 12, fontWeight: 600 }}>Stories (interactive stickers)</div>
+            <div style={{ fontSize: 11, color: connected ? 'var(--success)' : 'var(--text-muted)' }}>
+              {connected ? `✓ Connected · @${username}` : 'Not connected'}
+            </div>
+          </div>
+        </div>
+        {connected
+          ? <button onClick={onDisconnect} style={ghostBtn}><RefreshCw size={11} /> Remove</button>
+          : <button onClick={onSync} disabled={busy} style={primaryBtn}>{busy ? 'Verifying…' : 'Connect for Stories'}</button>
+        }
+      </div>
+      {!connected && message && (
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--warning)', lineHeight: 1.4 }}>{message}</div>
+      )}
     </div>
   );
 }

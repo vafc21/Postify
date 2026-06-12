@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { readToken, decrypt } = require('../utils/encryption');
 const { renderStoryToFile, renderStoryCardForVideo } = require('./storyRenderer');
 const { ensureIgImage, ensureJpeg, ensureStoryImage, compositeVideoStory, probeMedia } = require('./mediaProcessor');
+const storritoSvc = require('./storrito');
 
 // v18.0 reached end-of-life; v22.0 is current and within Meta's support window.
 // Endpoint shapes used here are unchanged across these versions.
@@ -161,6 +162,19 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
+  // Decide whether THIS client's IG story should publish through Storrito (native
+  // stickers) instead of the Graph path. Requires: operator Storrito creds, the
+  // client opted into stories AND linked a Storrito handle, and a layout that
+  // actually contains a Storrito-only sticker. Anything missing → Graph, so the
+  // default (no creds) behaviour is unchanged.
+  const client = post.client || {};
+  const storritoStory = (
+    storritoSvc.isConfigured(appCreds) &&
+    client.usesStories &&
+    client.storritoUsername &&
+    storritoSvc.layoutHasNativeStickers(post.storyLayout)
+  ) ? { user: appCreds, instagramUsername: client.storritoUsername, layout: post.storyLayout } : null;
+
   if (igToken && igToken.instagramAccountId && !igDone) {
     try {
       results.instagramResult = await publishToInstagram({
@@ -171,6 +185,7 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
         serverUrl,
         story: igStory,
         igProfile,
+        storrito: storritoStory,
       });
     } catch (err) {
       results.instagramResult = { error: err.response?.data || err.message };
@@ -197,20 +212,47 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   return results;
 }
 
-async function publishToInstagram({ igUserId, accessToken, appSecret, post, serverUrl, story, igProfile }) {
+async function publishToInstagram({ igUserId, accessToken, appSecret, post, serverUrl, story, igProfile, storrito }) {
   const { mediaType, mediaUrls, caption, postToStory, locationId, thumbOffset } = post;
   const feedResult = await publishIgFeed({
     igUserId, accessToken, appSecret, mediaType, mediaUrls, caption, serverUrl, locationId, thumbOffset,
   });
 
+  const graphStory = () => publishIgStory({
+    igUserId, accessToken, appSecret, story, serverUrl, username: igProfile?.username || null,
+  });
+
   let storyResult = null;
   if (postToStory && story) {
+    // Storrito needs a flat background image (the rendered card). For a video
+    // story we have no such card here, so those stay on the Graph path for now.
+    const useStorrito = storrito && story.image;
     try {
-      storyResult = await publishIgStory({
-        igUserId, accessToken, appSecret, story, serverUrl, username: igProfile?.username || null,
-      });
+      if (useStorrito) {
+        const r = await storritoSvc.publishStickerStory({
+          user: storrito.user,
+          instagramUsername: storrito.instagramUsername,
+          backgroundUrl: `${serverUrl}${story.image}`,
+          layout: storrito.layout,
+          fallbackMentionUsername: igProfile?.username || null,
+        });
+        storyResult = { via: 'storrito', ...r };
+      } else {
+        storyResult = await graphStory();
+      }
     } catch (err) {
-      storyResult = { error: err.response?.data || err.message };
+      // If Storrito fails (misconfig, outage, stale schema), don't drop the story
+      // — fall back to the Graph version so something still goes live.
+      if (useStorrito) {
+        console.warn(`Storrito story failed for IG ${igUserId}, falling back to Graph: ${err.message}`);
+        try {
+          storyResult = { via: 'graph-fallback', ...(await graphStory()) };
+        } catch (err2) {
+          storyResult = { error: err2.response?.data || err2.message };
+        }
+      } else {
+        storyResult = { error: err.response?.data || err.message };
+      }
     }
   }
 
@@ -521,6 +563,7 @@ module.exports = {
   publishPost,
   getLongLivedToken,
   getPagesAndIgAccounts,
+  getIgProfile,
   searchPlaces,
   graphErrorMessage,
   appendCaptionLink,

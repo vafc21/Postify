@@ -6,8 +6,18 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../utils/prisma');
 const auth = require('../middleware/authMiddleware');
+const { decrypt, readToken } = require('../utils/encryption');
+const { getIgProfile } = require('../services/meta');
+const storrito = require('../services/storrito');
 
 const router = express.Router();
+
+// Coerce the "uses stories" flag from multipart/form-data, where it arrives as a
+// string ("true"/"false"). Anything truthy-looking enables it.
+function parseUsesStories(v) {
+  if (v === undefined) return undefined;
+  return v === true || v === 'true' || v === '1' || v === 'on';
+}
 
 function runUpload(middleware) {
   return (req, res, next) => {
@@ -76,7 +86,7 @@ router.get('/', auth, async (req, res) => {
 // POST /api/clients
 router.post('/', auth, runUpload(uploadLogo.single('logo')), async (req, res) => {
   try {
-    const { name, businessName, website, industry, contactName, contactEmail, notes } = req.body;
+    const { name, businessName, website, industry, contactName, contactEmail, notes, usesStories } = req.body;
     if (!name) return res.status(400).json({ error: 'Client name is required' });
 
     const logoUrl = req.file ? `/uploads/logos/${req.file.filename}` : null;
@@ -92,6 +102,7 @@ router.post('/', auth, runUpload(uploadLogo.single('logo')), async (req, res) =>
         contactName: contactName || null,
         contactEmail: contactEmail || null,
         notes: notes || null,
+        usesStories: parseUsesStories(usesStories) || false,
       },
     });
     res.status(201).json(client);
@@ -125,7 +136,7 @@ router.put('/:id', auth, runUpload(uploadLogo.single('logo')), async (req, res) 
     const existing = await prisma.client.findFirst({ where: { id: req.params.id, userId: req.userId } });
     if (!existing) return res.status(404).json({ error: 'Client not found' });
 
-    const { name, businessName, website, industry, contactName, contactEmail, notes } = req.body;
+    const { name, businessName, website, industry, contactName, contactEmail, notes, usesStories } = req.body;
     const data = {};
     if (name) data.name = name;
     if (businessName !== undefined) data.businessName = businessName;
@@ -134,6 +145,7 @@ router.put('/:id', auth, runUpload(uploadLogo.single('logo')), async (req, res) 
     if (contactName !== undefined) data.contactName = contactName;
     if (contactEmail !== undefined) data.contactEmail = contactEmail;
     if (notes !== undefined) data.notes = notes;
+    if (usesStories !== undefined) data.usesStories = parseUsesStories(usesStories);
     if (req.file) data.logoUrl = `/uploads/logos/${req.file.filename}`;
 
     // Ownership verified by findFirst above; TOCTOU window is acceptable here
@@ -156,6 +168,84 @@ router.delete('/:id', auth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to delete client' });
+  }
+});
+
+// POST /api/clients/:id/storrito/sync — the one-time per-client "Connect for
+// Stories" verification. Resolves the client's IG handle and checks whether that
+// account is connected inside the operator's Storrito account. On a match it
+// records the handle (storrito then publishes that client's sticker stories);
+// otherwise it returns the handle to connect in Storrito and try again.
+//
+// Body (optional): { instagramUsername } to set the match manually when the IG
+// handle can't be auto-resolved via the Graph API.
+router.post('/:id/storrito/sync', auth, async (req, res) => {
+  try {
+    const client = await prisma.client.findFirst({
+      where: { id: req.params.id, userId: req.userId },
+      include: { tokens: true },
+    });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { storritoApiToken: true, storritoApiBase: true, metaAppSecret: true },
+    });
+    if (!storrito.isConfigured(user)) {
+      return res.status(400).json({ code: 'storrito_not_configured', error: 'Add your Storrito API token and base URL in Settings first.' });
+    }
+
+    // Figure out which IG handle to match: an explicit override, else resolve it
+    // from the client's connected Instagram account via the Graph API.
+    let handle = (req.body?.instagramUsername || '').trim().replace(/^@/, '');
+    if (!handle) {
+      const igToken = client.tokens.find((t) => t.platform === 'instagram');
+      if (!igToken || !igToken.instagramAccountId) {
+        return res.status(400).json({ error: 'Connect this client\'s Instagram account first, or pass the handle manually.' });
+      }
+      const profile = await getIgProfile(igToken.instagramAccountId, readToken(igToken.accessToken), decrypt(user.metaAppSecret));
+      handle = (profile?.username || '').replace(/^@/, '');
+      if (!handle) {
+        return res.status(400).json({ error: 'Could not resolve this client\'s Instagram handle. Pass it manually to link Storrito.' });
+      }
+    }
+
+    let connected;
+    try {
+      connected = await storrito.listInstagramUsers(user);
+    } catch (err) {
+      console.error('Storrito list-instagram-users failed:', err.message);
+      return res.status(502).json({ error: 'Could not reach Storrito to verify the connection. Check your API credentials.' });
+    }
+
+    const match = connected.find((u) => u.instagramUsername.toLowerCase() === handle.toLowerCase());
+    if (!match) {
+      return res.json({
+        connected: false,
+        instagramUsername: handle,
+        message: `@${handle} isn't connected in Storrito yet. Connect it in your Storrito account, then verify again.`,
+      });
+    }
+
+    await prisma.client.update({ where: { id: client.id }, data: { storritoUsername: match.instagramUsername, usesStories: true } });
+    res.json({ connected: true, instagramUsername: match.instagramUsername });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to sync Storrito connection' });
+  }
+});
+
+// DELETE /api/clients/:id/storrito — unlink the Storrito Stories connection
+// (the IG account stays connected inside Storrito; Postify just stops routing to it).
+router.delete('/:id/storrito', auth, async (req, res) => {
+  try {
+    const client = await prisma.client.findFirst({ where: { id: req.params.id, userId: req.userId } });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    await prisma.client.update({ where: { id: client.id }, data: { storritoUsername: null } });
+    res.json({ message: 'Storrito connection removed' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to remove Storrito connection' });
   }
 });
 

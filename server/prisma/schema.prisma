@@ -13,6 +13,13 @@ model User {
   passwordHash           String    @map("password_hash")
   metaAppId              String?   @map("meta_app_id")
   metaAppSecret          String?   @map("meta_app_secret")
+  // Storrito API credentials (operator-level, set once). Storrito publishes IG
+  // stories with NATIVE interactive stickers (polls, link stickers, hashtags)
+  // that the Graph API cannot. The token is encrypted at rest like metaAppSecret;
+  // the base URL is unique per Storrito account. Both null = feature dormant, and
+  // story publishing silently stays on the Graph path.
+  storritoApiToken       String?   @map("storrito_api_token")
+  storritoApiBase        String?   @map("storrito_api_base")
   theme                  String    @default("dark")
   timezone               String    @default("America/New_York") @map("timezone")
   notificationWebhookUrl String?   @map("notification_webhook_url")
@@ -34,6 +41,15 @@ model Client {
   contactName  String?  @map("contact_name")
   contactEmail String?  @map("contact_email")
   notes        String?
+  // Set at client creation ("Will this client use Stories?"). When true, the
+  // client's profile surfaces a Stories connection card and — once an IG account
+  // is linked in Storrito — story publishing routes through Storrito for native
+  // stickers. False = stories (if any) stay on the plain Graph path.
+  usesStories      Boolean  @default(false) @map("uses_stories")
+  // The Storrito-connected Instagram handle matched to this client. Null until
+  // the one-time per-client connect is done (in Storrito) and Postify verifies it
+  // via list-instagram-users. Non-null = "Stories: Connected" and ready to publish.
+  storritoUsername String?  @map("storrito_username")
   createdAt    DateTime @default(now()) @map("created_at")
 
   user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)

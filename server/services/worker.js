@@ -4,6 +4,7 @@ const axios = require('axios');
 const prisma = require('../utils/prisma');
 const { publishPost } = require('./meta');
 const { generateSlots } = require('./slotGenerator');
+const storrito = require('./storrito');
 
 const POLL_INTERVAL_MS = 60 * 1000;
 const MAX_PUBLISH_ATTEMPTS = 3;
@@ -33,7 +34,9 @@ async function sendWebhook(webhookUrl, event, post, client, extra = {}) {
       event,
       message: event === 'post_published'
         ? `Done - ${client.name}`
-        : `Failed - ${client.name}`,
+        : event === 'story_stickers_skipped'
+          ? `Warning - ${client.name}: interactive stickers dropped (${extra.reason || 'storrito unavailable'})`
+          : `Failed - ${client.name}`,
       clientName: client.name,
       businessName: client.businessName,
       postId: post.id,
@@ -66,7 +69,7 @@ async function processPost(post) {
       prisma.clientToken.findMany({ where: { clientId: post.clientId } }),
       prisma.user.findUnique({
         where: { id: post.client.userId },
-        select: { metaAppId: true, metaAppSecret: true, notificationWebhookUrl: true, timezone: true },
+        select: { metaAppId: true, metaAppSecret: true, storritoApiToken: true, storritoApiBase: true, notificationWebhookUrl: true, timezone: true },
       }),
     ]);
 
@@ -126,6 +129,21 @@ async function processPost(post) {
       return;
     }
 
+    // A story can carry interactive stickers (poll/link/hashtag) that ONLY
+    // Storrito can publish. If one was scheduled but Storrito wasn't set up — no
+    // API token, or this client isn't linked — the story still posts via Graph
+    // but those stickers are silently dropped. Flag it so the operator knows to
+    // finish setup instead of quietly shipping a sticker-less story.
+    let stickerGap = null;
+    if (post.postToStory && instagramResult) {
+      stickerGap = storrito.stickerGapReason(user, post.client, post.storyLayout);
+      if (stickerGap) {
+        instagramResult.storyWarning = stickerGap === 'no_api_credentials'
+          ? 'Interactive stickers were dropped — set your Storrito API token in Settings → Stories API.'
+          : 'Interactive stickers were dropped — connect this client for Stories on their profile page.';
+      }
+    }
+
     const updated = await prisma.scheduledPost.update({
       where: { id: post.id },
       data: {
@@ -136,6 +154,13 @@ async function processPost(post) {
     });
 
     await sendWebhook(user.notificationWebhookUrl, 'post_published', updated, post.client);
+    if (stickerGap) {
+      console.warn(`Worker: post ${post.id} posted but DROPPED interactive stickers — ${stickerGap}`);
+      await sendWebhook(user.notificationWebhookUrl, 'story_stickers_skipped', updated, post.client, {
+        reason: stickerGap,
+        warning: instagramResult.storyWarning,
+      });
+    }
   } catch (err) {
     // The post — or its parent campaign/client — can be deleted while we're
     // mid-publish; the cascade removes the row out from under us and Prisma
@@ -180,7 +205,7 @@ async function publishDuePosts() {
       scheduledFor: { lte: new Date() },
     },
     include: {
-      client: { select: { userId: true, name: true, businessName: true } },
+      client: { select: { userId: true, name: true, businessName: true, usesStories: true, storritoUsername: true } },
     },
   });
 
