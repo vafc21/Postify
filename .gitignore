@@ -38,3 +38,8 @@ Thumbs.db
 
 # Instagram private-API sessions (contain live login state — NEVER commit)
 server/scripts/.ig-session*.json
+
+# Throwaway private-API / instagrapi sticker-story POC probes (experiments, not wired in)
+server/scripts/__pycache__/
+server/scripts/sticker-story-session-poc.js
+server/scripts/sticker_story_*.py
