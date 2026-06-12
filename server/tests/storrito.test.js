@@ -34,3 +34,12 @@ describe('buildInstaStoryHtml variant attributes', () => {
     expect(html([{ type: 'mention', username: 'acme', design: 'rainbow' }])).toContain('design="rainbow"');
   });
 });
+
+describe('location routing', () => {
+  test('location is a Storrito-only type', () => {
+    expect(STORRITO_ONLY_TYPES.has('location')).toBe(true);
+  });
+  test('a location-only layout has native stickers', () => {
+    expect(layoutHasNativeStickers(layout([{ type: 'location', location: 'Cologne' }]))).toBe(true);
+  });
+});

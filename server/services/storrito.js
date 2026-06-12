@@ -24,7 +24,7 @@ const { readToken } = require('../utils/encryption');
 // story layout is what flips publishing from the Graph path to Storrito. A plain
 // self-`mention` is intentionally excluded: the Graph API can already do that one
 // via user_tags, so a mention-only story doesn't need to incur Storrito cost.
-const STORRITO_ONLY_TYPES = new Set(['link', 'hashtag', 'poll']);
+const STORRITO_ONLY_TYPES = new Set(['link', 'hashtag', 'poll', 'location']);
 
 // The story canvas is a fixed 1080x1920 (9:16) — there are no width/height
 // attributes on <insta-story>; positioning is plain absolute CSS in this space.
