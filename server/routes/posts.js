@@ -104,6 +104,14 @@ async function findPost(postId, userId) {
   });
 }
 
+// Every mutation echoes the updated post back to the client, which keeps it in
+// local state. Always include the client relation (the same shape the
+// campaign-posts list uses) so fields like client.storritoUsername and
+// businessName survive the round-trip. Without it, uploading media would strip
+// `client` off the post object and silently disable the story editor's Storrito
+// sticker controls (they gate on post.client.storritoUsername).
+const POST_CLIENT_INCLUDE = { client: { select: { id: true, name: true, businessName: true, storritoUsername: true } } };
+
 // GET /api/posts/places/search?clientId=&q=
 // Typeahead place search for location tagging. Uses the client's connected Meta
 // token so results are scoped to a real account.
@@ -227,6 +235,7 @@ router.post('/:id/media', auth, runUpload(uploadMedia.array('media', 10)), async
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
       data: { mediaType, mediaUrls, status: 'uploaded', attempts: 0 },
+      include: POST_CLIENT_INCLUDE,
     });
     res.json(updated);
   } catch (err) {
@@ -307,7 +316,7 @@ router.put('/:id', auth, async (req, res) => {
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
       data,
-      include: { client: { select: { id: true, name: true, businessName: true, storritoUsername: true } } },
+      include: POST_CLIENT_INCLUDE,
     });
     res.json(updated);
   } catch (err) {
@@ -330,6 +339,7 @@ router.delete('/:id/media', auth, async (req, res) => {
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
       data: { mediaType: null, mediaUrls: [], status: 'pending', attempts: 0 },
+      include: POST_CLIENT_INCLUDE,
     });
     res.json(updated);
   } catch (err) {
@@ -391,6 +401,7 @@ router.post('/:id/unpost', auth, async (req, res) => {
     const updated = await prisma.scheduledPost.update({
       where: { id: req.params.id },
       data: { status: 'unposted', instagramResult: null, facebookResult: null },
+      include: POST_CLIENT_INCLUDE,
     });
 
     res.json({

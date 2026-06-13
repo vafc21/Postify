@@ -80,8 +80,15 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
 
   const { user } = useAuth();
   // Interactive stickers are Instagram + Storrito only: the operator must have
-  // Storrito creds AND this client must be linked in Storrito.
-  const storritoReady = !!(user?.storritoConfigured && post.client?.storritoUsername);
+  // Storrito creds AND this client must be linked in Storrito. Track the two
+  // halves separately so the disabled-state hint can name the exact gap (a vague
+  // "connect Storrito" left it unclear which step was missing).
+  const operatorReady = !!user?.storritoConfigured;
+  const clientLinked = !!post.client?.storritoUsername;
+  const storritoReady = operatorReady && clientLinked;
+  const stickerBlockReason = operatorReady
+    ? (clientLinked ? '' : 'This client isn’t linked to Storrito yet. Open their profile → Stories → Verify to link them, then reopen this editor.')
+    : 'Add your Storrito API token + Base URL in Settings → Stories API to enable interactive stickers.';
 
   const canvasRef = useRef(null);
   const [canvas, setCanvas] = useState({ w: 1, h: 1 });
@@ -361,14 +368,14 @@ export default function StoryEditor({ post, displayName, onClose, onChange }) {
                   const Icon = S.icon;
                   return (
                     <button key={k} style={{ ...addBtn, opacity: storritoReady ? 1 : 0.45 }} disabled={!storritoReady}
-                      title={storritoReady ? '' : 'Connect Storrito to use interactive stickers'} onClick={() => addSticker(k)}>
+                      title={stickerBlockReason} onClick={() => addSticker(k)}>
                       <Icon size={16} /> {S.label}
                     </button>
                   );
                 })}
               </div>
               {platform === 'instagram' && !storritoReady && (
-                <div style={{ ...hintBox, marginTop: 8 }}>Interactive stickers publish through Storrito — connect it in Settings and link this client to enable.</div>
+                <div style={{ ...hintBox, marginTop: 8 }}>{stickerBlockReason}</div>
               )}
             </Section>
 
