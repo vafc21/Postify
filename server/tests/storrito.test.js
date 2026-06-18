@@ -3,6 +3,25 @@ const { buildInstaStoryHtml, STORRITO_ONLY_TYPES, layoutHasNativeStickers } = re
 const layout = (elements) => ({ version: 1, background: { type: 'auto' }, elements });
 const html = (elements) => buildInstaStoryHtml({ backgroundUrl: 'https://s/card.jpg', layout: layout(elements), fallbackMentionUsername: 'acme' });
 
+describe('buildInstaStoryHtml media background', () => {
+  const stickers = [{ type: 'mention', username: 'acme', x: 0.5, y: 0.9 }];
+
+  test('photo story uses an <img> background, no insta-story src', () => {
+    const out = buildInstaStoryHtml({ backgroundUrl: 'https://s/card.jpg', layout: layout(stickers) });
+    expect(out).toContain('<insta-story>');
+    expect(out).toContain('<img src="https://s/card.jpg"');
+    expect(out).not.toContain('insta-story src=');
+    expect(out).toContain('insta-mention');
+  });
+
+  test('video story sets <insta-story src> and emits no <img>', () => {
+    const out = buildInstaStoryHtml({ backgroundVideoUrl: 'https://s/card-vid.mp4', layout: layout(stickers) });
+    expect(out).toContain('<insta-story src="https://s/card-vid.mp4">');
+    expect(out).not.toContain('<img');
+    expect(out).toContain('insta-mention'); // tappable stickers still overlay
+  });
+});
+
 describe('buildInstaStoryHtml variant attributes', () => {
   test('hashtag emits design when non-default, omits when default/invalid', () => {
     expect(html([{ type: 'hashtag', tag: 'travel', design: 'gray' }])).toContain('hashtag="travel"');
