@@ -167,7 +167,7 @@ async function listInstagramUsers(user) {
  *   <insta-link url text> · <insta-hashtag hashtag> · <insta-mention username>
  *   <insta-poll question options(JSON)> · <insta-location location location-id>
  */
-function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername }) {
+function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername }) {
   const { width, height } = STORY_DIMENSIONS;
   const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
   const px = (v, span) => `${Math.round(clamp01(v) * span)}px`;
@@ -196,9 +196,22 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
     }
   }
 
+  // A VIDEO story puts the clip on the <insta-story src> attribute (confirmed:
+  // "If the <insta-story> element has a src pointing to a video, a video story is
+  // created"). The reshare-look CARD is already baked INTO that video by the
+  // compositor (card chrome behind a video-filled slot), so we add no <img>. A
+  // PHOTO story keeps the rendered card as a full-bleed <img> background. Either
+  // way the interactive stickers overlay on top and stay native/tappable.
+  const open = backgroundVideoUrl
+    ? `<insta-story src="${esc(backgroundVideoUrl)}">`
+    : '<insta-story>';
+  const background = backgroundVideoUrl
+    ? []
+    : [`  <img src="${esc(backgroundUrl)}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover" />`];
+
   return [
-    '<insta-story>',
-    `  <img src="${esc(backgroundUrl)}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover" />`,
+    open,
+    ...background,
     ...stickers.map((s) => `  ${s}`),
     '</insta-story>',
   ].join('\n');
@@ -209,7 +222,11 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
  *
  * @param {object}  user                operator with Storrito creds
  * @param {string}  instagramUsername   the Storrito-connected handle for this client
- * @param {string}  backgroundUrl       absolute URL to the rendered 9:16 card
+ * @param {string}  [backgroundUrl]     absolute URL to the rendered 9:16 card
+ *                                      (PHOTO stories) — the <img> background
+ * @param {string}  [backgroundVideoUrl] absolute URL to the composited card+video
+ *                                      MP4 (VIDEO stories) — the <insta-story src>.
+ *                                      Provide exactly one of these two.
  * @param {object}  layout              the story layout (source of native stickers)
  * @param {string}  fallbackMentionUsername  used for a bare self-mention element
  * @param {string}  [storyPostUuid]     caller-supplied idempotency UUID; one is
@@ -223,9 +240,9 @@ function buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername })
  * Re-sending the same `storyPostUuid` is idempotent, so retries can't double-post.
  * The response echoes { storyPostUuid, status: "scheduled" }.
  */
-async function publishStickerStory({ user, instagramUsername, backgroundUrl, layout, fallbackMentionUsername, storyPostUuid }) {
+async function publishStickerStory({ user, instagramUsername, backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, storyPostUuid }) {
   const http = clientFor(user);
-  const html = buildInstaStoryHtml({ backgroundUrl, layout, fallbackMentionUsername });
+  const html = buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername });
   const uuid = storyPostUuid || crypto.randomUUID();
   const data = await rpc(http, 'schedule-instagram-story', {
     instagramUsername,

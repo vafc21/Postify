@@ -80,6 +80,36 @@ async function searchPlaces(query, accessToken, appSecret) {
   return places;
 }
 
+// Default reshare-look story layouts — mirror the client StoryEditor defaults
+// (defaultLayout / defaultLayoutFb) so a post with NO saved layout still
+// publishes the CARD with the media inside, matching the native phone "add post
+// to your story". IG adds a tappable @mention; FB omits it (no FB mention
+// sticker). Kept in sync with client/src/components/StoryEditor.jsx.
+function defaultIgStoryLayout() {
+  return {
+    version: 1,
+    background: { type: 'gradient', value: 'linear-gradient(160deg,#f7971e,#ffd200)' },
+    elements: [
+      { id: 'post', type: 'post', x: 0.5, y: 0.42, width: 0.72, rotation: 0 },
+      { id: 'mention', type: 'mention', x: 0.5, y: 0.78, rotation: 0, scale: 1 },
+    ],
+  };
+}
+function defaultFbStoryLayout() {
+  return {
+    version: 1,
+    background: { type: 'gradient', value: 'linear-gradient(160deg,#f7971e,#ffd200)' },
+    elements: [
+      { id: 'post', type: 'post', x: 0.5, y: 0.42, width: 0.72, rotation: 0 },
+    ],
+  };
+}
+// A saved layout wins; an empty/null one falls back to the platform default card.
+function effectiveStoryLayout(saved, isIg) {
+  if (saved && Array.isArray(saved.elements) && saved.elements.length > 0) return saved;
+  return isIg ? defaultIgStoryLayout() : defaultFbStoryLayout();
+}
+
 async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   // Persist each platform's result the moment it's known (best-effort), so a
   // crash or DB hiccup AFTER a platform published doesn't cause a republish on
@@ -134,7 +164,12 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
           if (card && card.rect) {
             const url = await compositeVideoStory({ cardAbsPath: card.pngPath, rect: card.rect, videoUrl: post.mediaUrls[0] });
             if (url) return { video: url, mention: card.mention };
+            console.warn(`Story ${post.id}: video card composite failed (ffmpeg returned null) — posting raw clip`);
+          } else {
+            console.warn(`Story ${post.id}: could not locate card video slot (rect=${card && card.rect}) — posting raw clip`);
           }
+        } else {
+          console.warn(`Story ${post.id}: video post has no reshare-card layout — posting raw clip`);
         }
         return { video: post.mediaUrls[0] };           // raw video fallback
       }
@@ -153,8 +188,15 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
     }
   }
 
-  const igStory = igToken && igToken.instagramAccountId && !igDone ? await buildStory(post.storyLayout, { withMention: true }) : null;
-  const fbStory = fbToken && fbToken.pageId && !fbDone ? await buildStory(post.storyLayoutFb, { withMention: false }) : null;
+  // Resolve each platform's effective layout once (saved → else default card),
+  // so the rendered creative AND the Storrito sticker HTML use the very same
+  // layout — no drift between what's baked into the image/video and the tappable
+  // stickers Storrito overlays.
+  const igStoryLayout = effectiveStoryLayout(post.storyLayout, true);
+  const fbStoryLayout = effectiveStoryLayout(post.storyLayoutFb, false);
+
+  const igStory = igToken && igToken.instagramAccountId && !igDone ? await buildStory(igStoryLayout, { withMention: true }) : null;
+  const fbStory = fbToken && fbToken.pageId && !fbDone ? await buildStory(fbStoryLayout, { withMention: false }) : null;
 
   // Feed posts carry the optional link in the caption text (Meta has no separate
   // link field). Story creatives are rendered from the ORIGINAL caption above, so
@@ -162,18 +204,21 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
-  // Decide whether THIS client's IG story should publish through Storrito (native
-  // stickers) instead of the Graph path. Requires: operator Storrito creds, the
-  // client opted into stories AND linked a Storrito handle, and a layout that
-  // actually contains a Storrito-only sticker. Anything missing → Graph, so the
-  // default (no creds) behaviour is unchanged.
+  // Route THIS client's IG story through Storrito whenever the operator has creds
+  // and the client is connected — Storrito publishes the reshare-look card (baked
+  // into the story image/video) WITH native, tappable stickers, matching the
+  // phone "add post to your story" experience far better than the Graph path.
+  // Previously this ALSO required a link/poll/hashtag/location sticker, which
+  // excluded plain reshare cards (card + @mention) — exactly what users post — so
+  // those silently fell back to Graph and "never used Storrito". Anything missing
+  // → Graph, so the no-creds default is unchanged, and Graph remains the runtime
+  // fallback if a Storrito call fails.
   const client = post.client || {};
   const storritoStory = (
     storritoSvc.isConfigured(appCreds) &&
     client.usesStories &&
-    client.storritoUsername &&
-    storritoSvc.layoutHasNativeStickers(post.storyLayout)
-  ) ? { user: appCreds, instagramUsername: client.storritoUsername, layout: post.storyLayout } : null;
+    client.storritoUsername
+  ) ? { user: appCreds, instagramUsername: client.storritoUsername, layout: igStoryLayout } : null;
 
   if (igToken && igToken.instagramAccountId && !igDone) {
     try {
@@ -224,15 +269,18 @@ async function publishToInstagram({ igUserId, accessToken, appSecret, post, serv
 
   let storyResult = null;
   if (postToStory && story) {
-    // Storrito needs a flat background image (the rendered card). For a video
-    // story we have no such card here, so those stay on the Graph path for now.
-    const useStorrito = storrito && story.image;
+    // Storrito takes a PHOTO story as a flat <img> background (the rendered card)
+    // and a VIDEO story via the <insta-story src> attribute (the composited
+    // card+video MP4 built upstream). Either way the reshare-look card is already
+    // baked into the media, so Storrito just overlays the native tappable stickers.
+    const useStorrito = storrito && (story.image || story.video);
     try {
       if (useStorrito) {
         const r = await storritoSvc.publishStickerStory({
           user: storrito.user,
           instagramUsername: storrito.instagramUsername,
-          backgroundUrl: `${serverUrl}${story.image}`,
+          backgroundUrl: story.image ? `${serverUrl}${story.image}` : undefined,
+          backgroundVideoUrl: story.video ? `${serverUrl}${story.video}` : undefined,
           layout: storrito.layout,
           fallbackMentionUsername: igProfile?.username || null,
         });

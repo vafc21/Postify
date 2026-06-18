@@ -75,15 +75,21 @@ describe('publishPost — custom story rendering', () => {
     expect(res.facebookResult).toBeNull();
   });
 
-  it('falls back to the first image (no render) when there is no layout', async () => {
+  it('renders the DEFAULT reshare card when there is no saved layout', async () => {
+    // No saved layout no longer means a bare centered photo — it falls back to the
+    // default reshare card (matching the editor default and the native phone "add
+    // post to your story"), so the renderer IS invoked with a 'post' card element.
     const post = igPost({ storyLayout: null });
     await publishPost(post, igTokens, {}, SERVER);
 
-    expect(renderStoryToFile).not.toHaveBeenCalled();
+    expect(renderStoryToFile).toHaveBeenCalledTimes(1);
+    const arg = renderStoryToFile.mock.calls[0][0];
+    expect(arg.layout.elements.some((e) => e.type === 'post')).toBe(true);
+
     const body = storyContainerCall()[1];
-    expect(body.image_url).toBe(`${SERVER}/uploads/photos/a.jpg`);
-    // no custom layout → keep the default bottom-center self-mention
-    expect(body.user_tags).toEqual([{ username: 'acct', x: 0.5, y: 0.92 }]);
+    expect(body.image_url).toBe(`${SERVER}/uploads/stories/x.png`);
+    // the default card includes a mention → tappable user_tag at the rendered coords
+    expect(body.user_tags).toEqual([{ username: 'acct', x: 0.4, y: 0.7 }]);
   });
 
   it('omits the mention when it was removed from a custom layout', async () => {
