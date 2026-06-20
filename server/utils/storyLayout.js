@@ -79,6 +79,18 @@ function sanitizeStoryLayout(input) {
         el.design = cleanVariant('location', e);
       }
       return el;
+    })
+    // Drop blank interactive stickers (a link with no url, hashtag with no tag,
+    // poll with no question, location with no location) — the editor's
+    // makeDefault seeds these empty, and keeping them would make a layout look
+    // "stickered" (routing it to Storrito) while rendering to nothing tappable,
+    // billing Storrito for a no-op. Non-interactive elements are always kept.
+    .filter((el) => {
+      if (el.type === 'link') return !!el.url;
+      if (el.type === 'hashtag') return !!el.tag;
+      if (el.type === 'poll') return !!el.question;
+      if (el.type === 'location') return !!el.location;
+      return true;
     });
 
   return { version: 1, background, elements };

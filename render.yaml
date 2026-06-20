@@ -15,8 +15,12 @@ services:
       # memory logs: if rss stays well above heapUsed, the pressure is native
       # (Prisma / image libs), not the JS heap, and the real fix is a bigger
       # instance rather than a lower cap.
+      # --expose-gc lets the publish pipeline reclaim the large native Satori/
+      # resvg framebuffers between the story-card render and the ffmpeg encode
+      # (see services/meta.js) so those two native-heavy stages don't peak
+      # together; without it the manual global.gc() call is a no-op.
       - key: NODE_OPTIONS
-        value: --max-old-space-size=384
+        value: --max-old-space-size=384 --expose-gc
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

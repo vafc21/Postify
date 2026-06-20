@@ -28,6 +28,22 @@ try { FFPROBE = require('ffprobe-static')?.path || 'ffprobe'; } catch { FFPROBE 
 
 const UPLOADS = path.join(__dirname, '..', 'uploads');
 
+// Process-wide ffmpeg encode mutex. libx264 + decode buffers are NATIVE
+// allocations that live OUTSIDE the V8 heap the --max-old-space-size cap
+// governs, so two concurrent encodes can momentarily blow past the 512MB
+// container even though no large JS Buffer exists. The worker already serializes
+// POSTS, but ensureIgImage/ensureStoryImage/compositeVideoStory can be invoked
+// outside that loop (e.g. a preview/manual render path), so we gate every encode
+// here too: at most one ffmpeg child runs at a time, full stop.
+let ffmpegChain = Promise.resolve();
+function withFfmpegLock(task) {
+  const run = ffmpegChain.then(task, task);
+  // Keep the chain alive regardless of this task's outcome, but don't let it
+  // accumulate rejections (which would otherwise reject every future waiter).
+  ffmpegChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 // Instagram feed image aspect-ratio bounds (width / height).
 const IG_MIN_AR = 0.8;   // 4:5 portrait
 const IG_MAX_AR = 1.91;  // 1.91:1 landscape
@@ -209,19 +225,26 @@ async function compositeVideoStory({ cardAbsPath, rect, videoUrl, maxDurationSec
     + `[1:v][vid]overlay=${x}:${y}[outv]`;
 
   try {
-    await execFileAsync(FFMPEG, [
+    await withFfmpegLock(() => execFileAsync(FFMPEG, [
       '-y',
       '-stream_loop', '-1', '-i', videoAbs,          // loop short clips to fill 3s min
       '-loop', '1', '-i', cardAbsPath,               // hold the static card for the whole duration
       '-filter_complex', filter,
       '-map', '[outv]', '-map', '0:a?',
       '-t', String(dur),
+      // Single encode thread: libx264's multi-threaded lookahead multiplies its
+      // frame buffers, and on the 512MB instance that native footprint is the
+      // OOM risk. The story slot is small and downscaled, so one thread keeps
+      // peak RSS down with no meaningful quality/speed loss.
+      '-threads', '1',
       '-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
       '-r', '30', '-g', '60', '-movflags', '+faststart',
       '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2',
-      '-b:v', '3M', '-maxrate', '3M', '-bufsize', '6M',
+      // Smaller rate-control buffer (2M maxrate / 2M bufsize, was 3M/6M) shrinks
+      // the encoder's in-memory VBV buffer — the slot is tiny, so quality holds.
+      '-b:v', '2M', '-maxrate', '2M', '-bufsize', '2M',
       outAbs,
-    ], { timeout: 180000, maxBuffer: 1024 * 1024 * 16 });
+    ], { timeout: 180000, maxBuffer: 1024 * 1024 * 16 }));
     const relDir = path.relative(UPLOADS, path.dirname(outAbs)).split(path.sep).join('/');
     return `/uploads/${relDir}/${outName}`;
   } catch {

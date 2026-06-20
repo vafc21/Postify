@@ -1,4 +1,4 @@
-const { buildInstaStoryHtml, STORRITO_ONLY_TYPES, layoutHasNativeStickers } = require('../services/storrito');
+const { buildInstaStoryHtml, STORRITO_ONLY_TYPES, layoutHasNativeStickers, countStorritoStickers, publishStickerStory, StorritoDegenerateStoryError } = require('../services/storrito');
 
 const layout = (elements) => ({ version: 1, background: { type: 'auto' }, elements });
 const html = (elements) => buildInstaStoryHtml({ backgroundUrl: 'https://s/card.jpg', layout: layout(elements), fallbackMentionUsername: 'acme' });
@@ -60,5 +60,50 @@ describe('location routing', () => {
   });
   test('a location-only layout has native stickers', () => {
     expect(layoutHasNativeStickers(layout([{ type: 'location', location: 'Cologne' }]))).toBe(true);
+  });
+});
+
+describe('degenerate-story gating (no billable Storrito call for a bare card)', () => {
+  test('a plain reshare (card + mention) has NO native stickers', () => {
+    expect(layoutHasNativeStickers(layout([{ type: 'post' }, { type: 'mention', username: 'acme' }]))).toBe(false);
+    expect(countStorritoStickers(layout([{ type: 'post' }, { type: 'mention', username: 'acme' }]))).toBe(0);
+  });
+
+  test('a BLANK sticker does not count (link with empty url)', () => {
+    expect(layoutHasNativeStickers(layout([{ type: 'post' }, { type: 'link', url: '' }]))).toBe(false);
+    expect(countStorritoStickers(layout([{ type: 'hashtag', tag: '' }, { type: 'poll', question: '' }]))).toBe(0);
+  });
+
+  test('countStorritoStickers counts only populated Storrito-only stickers', () => {
+    const els = [
+      { type: 'post' }, { type: 'mention', username: 'acme' },
+      { type: 'link', url: 'https://x.io' }, { type: 'link', url: '' },
+      { type: 'hashtag', tag: 'travel' }, { type: 'location', location: '' },
+    ];
+    expect(countStorritoStickers(layout(els))).toBe(2);
+  });
+
+  test('publishStickerStory throws StorritoDegenerateStoryError BEFORE any network call', async () => {
+    // An unreachable base URL: if the guard failed to fire first, the rpc would
+    // reject with a connection error instead of the degenerate-story error.
+    const user = { storritoApiToken: 'tok', storritoApiBase: 'http://127.0.0.1:1' };
+    await expect(publishStickerStory({
+      user,
+      instagramUsername: 'acme',
+      backgroundUrl: 'https://s/card.jpg',
+      layout: layout([{ type: 'post' }, { type: 'mention', username: 'acme' }, { type: 'link', url: '' }]),
+    })).rejects.toThrow(StorritoDegenerateStoryError);
+  });
+
+  test('publishStickerStory does NOT throw degenerate for a populated sticker (reaches rpc)', async () => {
+    const user = { storritoApiToken: 'tok', storritoApiBase: 'http://127.0.0.1:1' };
+    // The guard passes, so it proceeds to the rpc and fails on the unreachable
+    // host instead — i.e. NOT the degenerate error.
+    await expect(publishStickerStory({
+      user,
+      instagramUsername: 'acme',
+      backgroundUrl: 'https://s/card.jpg',
+      layout: layout([{ type: 'post' }, { type: 'link', url: 'https://x.io' }]),
+    })).rejects.not.toThrow(StorritoDegenerateStoryError);
   });
 });

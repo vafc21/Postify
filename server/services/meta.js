@@ -162,6 +162,12 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
             videoAspect: m && m.width && m.height ? m.height / m.width : 0.82,
           });
           if (card && card.rect) {
+            // The Satori/resvg render above allocated large native RGBA
+            // framebuffers (1080x1920) that are now unreferenced (the card is on
+            // disk). Reclaim them BEFORE ffmpeg spawns so the two native-heavy
+            // stages don't peak together on the 512MB instance. Best-effort —
+            // only fires when node was started with --expose-gc.
+            if (typeof global.gc === 'function') { try { global.gc(); } catch (_) { /* ignore */ } }
             const url = await compositeVideoStory({ cardAbsPath: card.pngPath, rect: card.rect, videoUrl: post.mediaUrls[0] });
             if (url) return { video: url, mention: card.mention };
             console.warn(`Story ${post.id}: video card composite failed (ffmpeg returned null) — posting raw clip`);
@@ -204,20 +210,20 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
-  // Route THIS client's IG story through Storrito whenever the operator has creds
-  // and the client is connected — Storrito publishes the reshare-look card (baked
-  // into the story image/video) WITH native, tappable stickers, matching the
-  // phone "add post to your story" experience far better than the Graph path.
-  // Previously this ALSO required a link/poll/hashtag/location sticker, which
-  // excluded plain reshare cards (card + @mention) — exactly what users post — so
-  // those silently fell back to Graph and "never used Storrito". Anything missing
-  // → Graph, so the no-creds default is unchanged, and Graph remains the runtime
-  // fallback if a Storrito call fails.
+  // Route THIS client's IG story through Storrito ONLY when the operator has
+  // creds, the client is connected, AND the layout actually carries a POPULATED
+  // native sticker (link/poll/hashtag/location with its required field filled) —
+  // i.e. something the Graph path genuinely can't render. A plain reshare (card +
+  // @mention) or a layout whose only stickers are blank renders to nothing
+  // interactive, so it routes to Graph (which self-tags the mention for free) and
+  // Storrito is never billed for a no-op card image. Graph also remains the
+  // runtime fallback if a legitimately-stickered Storrito call fails.
   const client = post.client || {};
   const storritoStory = (
     storritoSvc.isConfigured(appCreds) &&
     client.usesStories &&
-    client.storritoUsername
+    client.storritoUsername &&
+    storritoSvc.layoutHasNativeStickers(igStoryLayout)
   ) ? { user: appCreds, instagramUsername: client.storritoUsername, layout: igStoryLayout } : null;
 
   if (igToken && igToken.instagramAccountId && !igDone) {

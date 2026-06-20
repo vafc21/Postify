@@ -13,6 +13,7 @@ export default function CampaignView() {
   const [posts, setPosts] = useState([]);
   const [filter, setFilter] = useState('All');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null); // 'notfound' | 'error' | null
   const [editingEnd, setEditingEnd] = useState(false);
   const [endDraft, setEndDraft] = useState('');
   const [savingEnd, setSavingEnd] = useState(false);
@@ -23,6 +24,7 @@ export default function CampaignView() {
   const reqId = useRef(0);
   const load = useCallback(() => {
     const my = ++reqId.current;
+    setLoadError(null);
     Promise.all([
       api.get(`/campaigns/${id}`),
       api.get(`/posts/campaign/${id}`),
@@ -30,7 +32,19 @@ export default function CampaignView() {
       if (my !== reqId.current) return;
       setCampaign(campRes.data);
       setPosts(postsRes.data);
-    }).catch(console.error).finally(() => { if (my === reqId.current) setLoading(false); });
+    }).catch((err) => {
+      if (my !== reqId.current) return;
+      setCampaign(null);
+      setPosts([]);
+      // A 404 means the campaign id is stale/gone (e.g. after a DB reset) — an
+      // expected empty state, not an error to spew. Log only real failures.
+      if (err.response?.status === 404) {
+        setLoadError('notfound');
+      } else {
+        setLoadError('error');
+        console.error('Failed to load campaign:', err.message);
+      }
+    }).finally(() => { if (my === reqId.current) setLoading(false); });
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
@@ -91,7 +105,25 @@ export default function CampaignView() {
   });
 
   if (loading) return <div style={loadingStyle}>Loading...</div>;
-  if (!campaign) return <div style={loadingStyle}>Campaign not found</div>;
+  if (!campaign) {
+    const isError = loadError === 'error';
+    return (
+      <div style={{ ...loadingStyle, flexDirection: 'column', gap: 12, textAlign: 'center', padding: 24 }}>
+        <div style={{ color: 'var(--text)', fontSize: 15, fontWeight: 600 }}>
+          {isError ? "Couldn't load this campaign" : 'Campaign not found'}
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 360 }}>
+          {isError
+            ? 'Something went wrong reaching the server. Check your connection and try again.'
+            : "This campaign doesn't exist anymore — it may have been deleted. The link you followed is out of date."}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          {isError && <button onClick={load} style={{ padding: '8px 16px', borderRadius: 6, background: 'var(--primary)', color: '#fff', fontWeight: 600, border: 'none', cursor: 'pointer', fontSize: 13 }}>Retry</button>}
+          <button onClick={() => navigate('/')} style={{ padding: '8px 16px', borderRadius: 6, background: isError ? 'var(--bg-3)' : 'var(--primary)', color: isError ? 'var(--text-muted)' : '#fff', fontWeight: 600, border: 'none', cursor: 'pointer', fontSize: 13 }}>Back to dashboard</button>
+        </div>
+      </div>
+    );
+  }
 
   const scheduleDesc = describeSchedule(campaign);
   const daysUntilEnd = campaign.endDate

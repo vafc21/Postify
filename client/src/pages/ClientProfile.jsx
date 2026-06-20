@@ -15,6 +15,10 @@ export default function ClientProfile() {
   const [showWizard, setShowWizard] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [loading, setLoading] = useState(true);
+  // 'notfound' = this client id doesn't exist (e.g. a stale link after a DB
+  // reset); 'error' = an actual network/server failure. Kept distinct so the UI
+  // can show a calm empty state for the former instead of a scary error.
+  const [loadError, setLoadError] = useState(null);
   const [storritoBusy, setStorritoBusy] = useState(false);
   const [storritoMsg, setStorritoMsg] = useState('');
 
@@ -22,6 +26,7 @@ export default function ClientProfile() {
   const reqId = useRef(0);
   const load = useCallback(() => {
     const my = ++reqId.current;
+    setLoadError(null);
     Promise.all([
       api.get(`/clients/${id}`),
       api.get(`/clients/${id}/campaigns`),
@@ -29,7 +34,20 @@ export default function ClientProfile() {
       if (my !== reqId.current) return;
       setClient(clientRes.data);
       setCampaigns(campaignRes.data);
-    }).catch(console.error).finally(() => { if (my === reqId.current) setLoading(false); });
+    }).catch((err) => {
+      if (my !== reqId.current) return;
+      setClient(null);
+      setCampaigns([]);
+      // A 404 just means the client id is stale/gone — that's an expected state
+      // (e.g. after a DB reset), not an error worth spewing to the console. Only
+      // log genuinely unexpected failures so real problems stay visible.
+      if (err.response?.status === 404) {
+        setLoadError('notfound');
+      } else {
+        setLoadError('error');
+        console.error('Failed to load client profile:', err.message);
+      }
+    }).finally(() => { if (my === reqId.current) setLoading(false); });
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
@@ -115,7 +133,25 @@ export default function ClientProfile() {
   };
 
   if (loading) return <div style={loadingStyle}>Loading...</div>;
-  if (!client) return <div style={loadingStyle}>Client not found</div>;
+  if (!client) {
+    const isError = loadError === 'error';
+    return (
+      <div style={{ ...loadingStyle, flexDirection: 'column', gap: 12, textAlign: 'center', padding: 24 }}>
+        <div style={{ color: 'var(--text)', fontSize: 15, fontWeight: 600 }}>
+          {isError ? "Couldn't load this client" : 'Client not found'}
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 360 }}>
+          {isError
+            ? 'Something went wrong reaching the server. Check your connection and try again.'
+            : "This client doesn't exist anymore — it may have been deleted. The link you followed is out of date."}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          {isError && <button onClick={load} style={primaryBtn}>Retry</button>}
+          <button onClick={() => navigate('/')} style={isError ? ghostBtn : primaryBtn}>Back to dashboard</button>
+        </div>
+      </div>
+    );
+  }
 
   const igToken = client.tokens?.find(t => t.platform === 'instagram');
   const fbToken = client.tokens?.find(t => t.platform === 'facebook');

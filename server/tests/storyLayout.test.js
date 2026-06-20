@@ -34,6 +34,21 @@ describe('sanitizeStoryLayout — Storrito stickers', () => {
     expect(only([{ type: 'sparkles' }, { type: 'hashtag', tag: 'x' }]).map((e) => e.type)).toEqual(['hashtag']);
   });
 
+  test('blank interactive stickers are dropped (would bill Storrito for a no-op)', () => {
+    const els = only([
+      { type: 'post', x: 0.5, y: 0.4, width: 0.7 },
+      { type: 'mention', username: 'acme' },
+      { type: 'link', url: '' },            // blank → dropped
+      { type: 'link', url: 'not-a-url' },   // non-http → url:'' → dropped
+      { type: 'hashtag', tag: '' },         // blank → dropped
+      { type: 'poll', question: '' },       // blank → dropped
+      { type: 'location', location: '' },   // blank → dropped
+      { type: 'link', url: 'https://real.io' }, // populated → kept
+    ]);
+    expect(els.map((e) => e.type)).toEqual(['post', 'mention', 'link']);
+    expect(els.find((e) => e.type === 'link').url).toBe('https://real.io');
+  });
+
   test('null clears; empty elements returns a valid shape', () => {
     expect(sanitizeStoryLayout(null)).toBeNull();
     expect(wrap([]).elements).toEqual([]);

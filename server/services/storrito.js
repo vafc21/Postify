@@ -64,15 +64,55 @@ class StorritoNotConfiguredError extends Error {
   }
 }
 
+// Thrown BEFORE any billable Storrito call when the story would render to nothing
+// but the baked card image (plus maybe a self-mention) — i.e. it carries zero
+// Storrito-only interactive stickers. Storrito bills per submitted story, so a
+// no-op like this must never reach the API; the caller falls back to the Graph
+// path (which already self-tags the mention for free).
+class StorritoDegenerateStoryError extends Error {
+  constructor(msg = 'Story has no Storrito-only interactive sticker — refusing to spend a billable Storrito call') {
+    super(msg);
+    this.name = 'StorritoDegenerateStoryError';
+    this.code = 'STORRITO_DEGENERATE_STORY';
+  }
+}
+
+// Is THIS element an emittable Storrito-only interactive sticker? Mirrors the
+// exact emission conditions in buildInstaStoryHtml: a link needs a non-empty
+// url, a hashtag a tag, a poll a question, a location a location string. A blank
+// link (url === '') does NOT count. `mention` is excluded by STORRITO_ONLY_TYPES
+// (the Graph path tags it for free), so it never counts here.
+function isEmittableStorritoSticker(el) {
+  if (!el || !STORRITO_ONLY_TYPES.has(el.type)) return false;
+  if (el.type === 'link') return !!el.url;
+  if (el.type === 'hashtag') return !!el.tag;
+  if (el.type === 'poll') return !!el.question;
+  if (el.type === 'location') return !!el.location;
+  return false;
+}
+
+// Count the actually-emittable Storrito-only stickers in a layout — the
+// authoritative "is this worth a Storrito call?" measure shared by the routing
+// gate (meta.js) and the pre-publish degenerate guard below.
+function countStorritoStickers(layout) {
+  if (!layout || !Array.isArray(layout.elements)) return 0;
+  return layout.elements.filter(isEmittableStorritoSticker).length;
+}
+
 /** True when the operator (User) has both a Storrito token and base URL set. */
 function isConfigured(user) {
   return !!(user && user.storritoApiToken && user.storritoApiBase);
 }
 
-/** Does this story layout contain a sticker only Storrito can publish natively? */
+/**
+ * Does this story layout contain a POPULATED sticker only Storrito can publish
+ * natively? A bare/blank sticker (e.g. a link with an empty url, which is what
+ * the editor's makeDefault produces) does NOT count — it would render to nothing
+ * yet still incur a billable Storrito call, so it must route to the Graph path.
+ * Mirrors the exact emission conditions in buildInstaStoryHtml.
+ */
 function layoutHasNativeStickers(layout) {
-  if (!layout || !Array.isArray(layout.elements)) return false;
-  return layout.elements.some((el) => el && STORRITO_ONLY_TYPES.has(el.type));
+  return countStorritoStickers(layout) > 0;
 }
 
 /**
@@ -243,6 +283,16 @@ function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallba
 async function publishStickerStory({ user, instagramUsername, backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, storyPostUuid }) {
   const http = clientFor(user);
   const html = buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername });
+  // GUARD (must precede the billable rpc): if the layout carries no emittable
+  // Storrito-only interactive sticker, the published story would be just the
+  // baked card image (+ maybe a self-mention) — a no-op Storrito would still
+  // bill for. Throw loudly so the caller falls back to the (free) Graph path
+  // BEFORE schedule-instagram-story is ever invoked.
+  if (countStorritoStickers(layout) === 0) {
+    throw new StorritoDegenerateStoryError(
+      `Refusing Storrito call for @${instagramUsername}: story has no interactive sticker (would bill for a bare card image)`
+    );
+  }
   const uuid = storyPostUuid || crypto.randomUUID();
   const data = await rpc(http, 'schedule-instagram-story', {
     instagramUsername,
@@ -278,9 +328,12 @@ async function getStoryStatus(user, storyPostUuid) {
 
 module.exports = {
   StorritoNotConfiguredError,
+  StorritoDegenerateStoryError,
   STORRITO_ONLY_TYPES,
   STICKER_VARIANTS,
   isConfigured,
+  isEmittableStorritoSticker,
+  countStorritoStickers,
   layoutHasNativeStickers,
   stickerGapReason,
   listInstagramUsers,
