@@ -64,19 +64,6 @@ class StorritoNotConfiguredError extends Error {
   }
 }
 
-// Thrown BEFORE any billable Storrito call when the story would render to nothing
-// but the baked card image (plus maybe a self-mention) — i.e. it carries zero
-// Storrito-only interactive stickers. Storrito bills per submitted story, so a
-// no-op like this must never reach the API; the caller falls back to the Graph
-// path (which already self-tags the mention for free).
-class StorritoDegenerateStoryError extends Error {
-  constructor(msg = 'Story has no Storrito-only interactive sticker — refusing to spend a billable Storrito call') {
-    super(msg);
-    this.name = 'StorritoDegenerateStoryError';
-    this.code = 'STORRITO_DEGENERATE_STORY';
-  }
-}
-
 // Is THIS element an emittable Storrito-only interactive sticker? Mirrors the
 // exact emission conditions in buildInstaStoryHtml: a link needs a non-empty
 // url, a hashtag a tag, a poll a question, a location a location string. A blank
@@ -106,10 +93,13 @@ function isConfigured(user) {
 
 /**
  * Does this story layout contain a POPULATED sticker only Storrito can publish
- * natively? A bare/blank sticker (e.g. a link with an empty url, which is what
- * the editor's makeDefault produces) does NOT count — it would render to nothing
- * yet still incur a billable Storrito call, so it must route to the Graph path.
- * Mirrors the exact emission conditions in buildInstaStoryHtml.
+ * natively (a link/hashtag/poll/location with its required field filled)? A
+ * bare/blank sticker (e.g. a link with an empty url, the editor's makeDefault)
+ * does NOT count. NOTE: this no longer gates IG routing — every connected IG
+ * reshare now goes through Storrito for the tappable repost link. It is used only
+ * by stickerGapReason to alert the operator when a story that DID carry such a
+ * sticker had to fall back to Graph (which can't render it). Mirrors the exact
+ * emission conditions in buildInstaStoryHtml.
  */
 function layoutHasNativeStickers(layout) {
   return countStorritoStickers(layout) > 0;
@@ -197,17 +187,25 @@ async function listInstagramUsers(user) {
 }
 
 /**
- * Translate a Postify story layout into Storrito's `<insta-story>` HTML.
- *
- * The fully rendered 9:16 card (text, the reshared post image, background) is
- * passed as `backgroundUrl` and baked in as the base image — so here we only emit
- * the INTERACTIVE stickers that must stay native and tappable. Element coords are
- * normalized 0–1 and mapped to absolute pixels on the 1080x1920 canvas, centered
- * on the point. Sticker data lives in component ATTRIBUTES (not text content):
+ * Translate a Postify story layout into Storrito's `<insta-story>` HTML — a REAL
+ * Instagram repost, not a flat picture. The fully rendered 9:16 reshare-look card
+ * (the original post's image + author + caption on the background) is passed as
+ * `backgroundUrl` and baked in as the base image, then we overlay the NATIVE,
+ * TAPPABLE stickers that make it a genuine repost:
+ *   • the REPOST LINK — an <insta-link> pointing at the just-published post's
+ *     permalink (`repostUrl`), so a viewer can tap the reshare to open the
+ *     original post, exactly like Instagram's "add post to your story". This is
+ *     ALWAYS emitted when a permalink is known — it's what turns a baked card
+ *     into a linked repost instead of a dead picture.
+ *   • the self-@mention — a tappable <insta-mention> for the resharing account.
+ *   • any extra interactive stickers from the layout (link/hashtag/poll/location).
+ * Element coords are normalized 0–1 and mapped to absolute pixels on the
+ * 1080x1920 canvas, centered on the point. Sticker data lives in component
+ * ATTRIBUTES (not text content):
  *   <insta-link url text> · <insta-hashtag hashtag> · <insta-mention username>
  *   <insta-poll question options(JSON)> · <insta-location location location-id>
  */
-function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername }) {
+function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, repostUrl, repostLabel }) {
   const { width, height } = STORY_DIMENSIONS;
   const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
   const px = (v, span) => `${Math.round(clamp01(v) * span)}px`;
@@ -216,6 +214,19 @@ function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallba
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   const stickers = [];
+
+  // THE REPOST LINK — what makes this a tappable, linked repost rather than a
+  // flat baked picture. Anchored just below the reshared post card (or canvas
+  // center when no `post` element is present). Only http(s) permalinks are
+  // accepted (SSRF/junk guard); the emoji + label read as a native CTA sticker.
+  if (repostUrl && /^https?:\/\//i.test(repostUrl)) {
+    const postEl = (layout?.elements || []).find((e) => e && e.type === 'post');
+    const rx = postEl ? clamp01(postEl.x ?? 0.5) : 0.5;
+    const ry = postEl ? clamp01((postEl.y ?? 0.42) + 0.26) : 0.66;
+    const label = repostLabel || '👉 View original post';
+    stickers.push(`<insta-link style="${at({ x: rx, y: ry })}" url="${esc(repostUrl)}" text="${esc(label)}"></insta-link>`);
+  }
+
   for (const el of (layout?.elements || [])) {
     if (!el) continue;
     if (el.type === 'link' && el.url) {
@@ -279,20 +290,13 @@ function buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallba
  * ISO-8601 `date` schedules for later (omitted = post now — Postify owns timing).
  * Re-sending the same `storyPostUuid` is idempotent, so retries can't double-post.
  * The response echoes { storyPostUuid, status: "scheduled" }.
+ *
+ * @param {string} [repostUrl]  permalink of the just-published feed post — emitted
+ *        as the tappable repost-link sticker so the story is a real linked repost.
  */
-async function publishStickerStory({ user, instagramUsername, backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, storyPostUuid }) {
+async function publishStickerStory({ user, instagramUsername, backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, repostUrl, repostLabel, storyPostUuid }) {
   const http = clientFor(user);
-  const html = buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername });
-  // GUARD (must precede the billable rpc): if the layout carries no emittable
-  // Storrito-only interactive sticker, the published story would be just the
-  // baked card image (+ maybe a self-mention) — a no-op Storrito would still
-  // bill for. Throw loudly so the caller falls back to the (free) Graph path
-  // BEFORE schedule-instagram-story is ever invoked.
-  if (countStorritoStickers(layout) === 0) {
-    throw new StorritoDegenerateStoryError(
-      `Refusing Storrito call for @${instagramUsername}: story has no interactive sticker (would bill for a bare card image)`
-    );
-  }
+  const html = buildInstaStoryHtml({ backgroundUrl, backgroundVideoUrl, layout, fallbackMentionUsername, repostUrl, repostLabel });
   const uuid = storyPostUuid || crypto.randomUUID();
   const data = await rpc(http, 'schedule-instagram-story', {
     instagramUsername,
@@ -328,7 +332,6 @@ async function getStoryStatus(user, storyPostUuid) {
 
 module.exports = {
   StorritoNotConfiguredError,
-  StorritoDegenerateStoryError,
   STORRITO_ONLY_TYPES,
   STICKER_VARIANTS,
   isConfigured,

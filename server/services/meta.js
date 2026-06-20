@@ -210,20 +210,21 @@ async function publishPost(post, tokens, appCreds, serverUrl, opts = {}) {
   const feedCaption = appendCaptionLink(post.caption, post.link);
   const feedPost = feedCaption === post.caption ? post : { ...post, caption: feedCaption };
 
-  // Route THIS client's IG story through Storrito ONLY when the operator has
-  // creds, the client is connected, AND the layout actually carries a POPULATED
-  // native sticker (link/poll/hashtag/location with its required field filled) —
-  // i.e. something the Graph path genuinely can't render. A plain reshare (card +
-  // @mention) or a layout whose only stickers are blank renders to nothing
-  // interactive, so it routes to Graph (which self-tags the mention for free) and
-  // Storrito is never billed for a no-op card image. Graph also remains the
-  // runtime fallback if a legitimately-stickered Storrito call fails.
+  // Route EVERY connected IG story through Storrito's repost flow whenever the
+  // operator has creds and the client is linked — this is what produces a real,
+  // tappable Instagram repost (the reshare-look card + a link sticker back to the
+  // original post + the @mention + any native stickers), matching the phone "add
+  // post to your story". There is intentionally NO "skip Storrito unless the
+  // layout has an interactive sticker" condition: a plain reshare must still go
+  // through Storrito so it gets the tappable repost link instead of a dead picture.
+  // The only preconditions are creds + a connected client (without them Storrito
+  // literally cannot be called); Graph remains the runtime fallback only if a
+  // Storrito call actually fails.
   const client = post.client || {};
   const storritoStory = (
     storritoSvc.isConfigured(appCreds) &&
     client.usesStories &&
-    client.storritoUsername &&
-    storritoSvc.layoutHasNativeStickers(igStoryLayout)
+    client.storritoUsername
   ) ? { user: appCreds, instagramUsername: client.storritoUsername, layout: igStoryLayout } : null;
 
   if (igToken && igToken.instagramAccountId && !igDone) {
@@ -277,8 +278,10 @@ async function publishToInstagram({ igUserId, accessToken, appSecret, post, serv
   if (postToStory && story) {
     // Storrito takes a PHOTO story as a flat <img> background (the rendered card)
     // and a VIDEO story via the <insta-story src> attribute (the composited
-    // card+video MP4 built upstream). Either way the reshare-look card is already
-    // baked into the media, so Storrito just overlays the native tappable stickers.
+    // card+video MP4 built upstream). The reshare-look card is baked into the
+    // media; Storrito then overlays the native tappable stickers — crucially the
+    // repost LINK back to the post we just published (`feedResult.permalink`),
+    // which is what makes the reshare a real tappable repost and not a dead image.
     const useStorrito = storrito && (story.image || story.video);
     try {
       if (useStorrito) {
@@ -289,6 +292,7 @@ async function publishToInstagram({ igUserId, accessToken, appSecret, post, serv
           backgroundVideoUrl: story.video ? `${serverUrl}${story.video}` : undefined,
           layout: storrito.layout,
           fallbackMentionUsername: igProfile?.username || null,
+          repostUrl: feedResult?.permalink || null,
         });
         storyResult = { via: 'storrito', ...r };
       } else {

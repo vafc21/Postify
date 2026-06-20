@@ -1,4 +1,4 @@
-const { buildInstaStoryHtml, STORRITO_ONLY_TYPES, layoutHasNativeStickers, countStorritoStickers, publishStickerStory, StorritoDegenerateStoryError } = require('../services/storrito');
+const { buildInstaStoryHtml, STORRITO_ONLY_TYPES, layoutHasNativeStickers, countStorritoStickers, publishStickerStory } = require('../services/storrito');
 
 const layout = (elements) => ({ version: 1, background: { type: 'auto' }, elements });
 const html = (elements) => buildInstaStoryHtml({ backgroundUrl: 'https://s/card.jpg', layout: layout(elements), fallbackMentionUsername: 'acme' });
@@ -63,7 +63,9 @@ describe('location routing', () => {
   });
 });
 
-describe('degenerate-story gating (no billable Storrito call for a bare card)', () => {
+// These helpers no longer gate IG routing (every connected reshare goes through
+// Storrito now) — they only feed stickerGapReason's "stickers were dropped" alert.
+describe('native-sticker counting (for the dropped-sticker alert)', () => {
   test('a plain reshare (card + mention) has NO native stickers', () => {
     expect(layoutHasNativeStickers(layout([{ type: 'post' }, { type: 'mention', username: 'acme' }]))).toBe(false);
     expect(countStorritoStickers(layout([{ type: 'post' }, { type: 'mention', username: 'acme' }]))).toBe(0);
@@ -82,28 +84,42 @@ describe('degenerate-story gating (no billable Storrito call for a bare card)', 
     ];
     expect(countStorritoStickers(layout(els))).toBe(2);
   });
+});
 
-  test('publishStickerStory throws StorritoDegenerateStoryError BEFORE any network call', async () => {
-    // An unreachable base URL: if the guard failed to fire first, the rpc would
-    // reject with a connection error instead of the degenerate-story error.
-    const user = { storritoApiToken: 'tok', storritoApiBase: 'http://127.0.0.1:1' };
-    await expect(publishStickerStory({
-      user,
-      instagramUsername: 'acme',
+describe('repost link (real tappable repost, not a bare picture)', () => {
+  const reshare = [{ type: 'post', x: 0.5, y: 0.42 }, { type: 'mention', username: 'acme' }];
+
+  test('a plain reshare with a permalink emits a tappable link sticker back to the post', () => {
+    const out = buildInstaStoryHtml({
       backgroundUrl: 'https://s/card.jpg',
-      layout: layout([{ type: 'post' }, { type: 'mention', username: 'acme' }, { type: 'link', url: '' }]),
-    })).rejects.toThrow(StorritoDegenerateStoryError);
+      layout: layout(reshare),
+      repostUrl: 'https://www.instagram.com/p/ABC123/',
+    });
+    expect(out).toContain('<insta-link');
+    expect(out).toContain('url="https://www.instagram.com/p/ABC123/"');
+    expect(out).toContain('insta-mention'); // mention still tappable too
   });
 
-  test('publishStickerStory does NOT throw degenerate for a populated sticker (reaches rpc)', async () => {
+  test('a non-http(s) repostUrl is rejected (no junk/SSRF link)', () => {
+    const out = buildInstaStoryHtml({
+      backgroundUrl: 'https://s/card.jpg',
+      layout: layout(reshare),
+      repostUrl: 'javascript:alert(1)',
+    });
+    expect(out).not.toContain('insta-link');
+  });
+
+  test('publishStickerStory no longer short-circuits a plain reshare — it reaches the rpc', async () => {
+    // The old degenerate guard would throw before any network call; now a plain
+    // card+mention reshare proceeds to schedule-instagram-story (and only fails
+    // here because the host is unreachable), proving Storrito is never skipped.
     const user = { storritoApiToken: 'tok', storritoApiBase: 'http://127.0.0.1:1' };
-    // The guard passes, so it proceeds to the rpc and fails on the unreachable
-    // host instead — i.e. NOT the degenerate error.
     await expect(publishStickerStory({
       user,
       instagramUsername: 'acme',
       backgroundUrl: 'https://s/card.jpg',
-      layout: layout([{ type: 'post' }, { type: 'link', url: 'https://x.io' }]),
-    })).rejects.not.toThrow(StorritoDegenerateStoryError);
+      layout: layout(reshare),
+      repostUrl: 'https://www.instagram.com/p/ABC123/',
+    })).rejects.toThrow(); // a connection error, NOT a "skip Storrito" no-op
   });
 });
